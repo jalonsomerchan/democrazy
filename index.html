@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Democrazy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: '#7C3AED', dark: '#5B21B6', light: '#A78BFA' }
+          },
+          fontFamily: { game: ['Outfit', 'system-ui', 'sans-serif'] }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* ── Screens ── */
+    .screen { display: none; }
+    .screen.active {
+      display: flex;
+      animation: screenIn .3s cubic-bezier(.34,1.4,.64,1) forwards;
+    }
+    @keyframes screenIn {
+      from { opacity: 0; transform: translateY(18px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0)   scale(1);   }
+    }
+
+    /* ── Pop ── */
+    @keyframes pop {
+      0%   { transform: scale(.35); opacity: 0; }
+      70%  { transform: scale(1.07); }
+      100% { transform: scale(1);   opacity: 1; }
+    }
+    .pop { animation: pop .38s cubic-bezier(.34,1.4,.64,1) forwards; opacity: 0; }
+
+    /* ── Shake ── */
+    @keyframes shake {
+      0%,100% { transform: translateX(0); }
+      20%     { transform: translateX(-8px); }
+      40%     { transform: translateX(8px); }
+      60%     { transform: translateX(-5px); }
+      80%     { transform: translateX(4px); }
+    }
+    .shake { animation: shake .38s ease; }
+
+    /* ── Toggle ── */
+    .toggle { position:relative; display:inline-block; width:48px; height:28px; flex-shrink:0; }
+    .toggle input { opacity:0; width:0; height:0; }
+    .toggle-track {
+      position:absolute; inset:0; background:#3f3f46; border-radius:999px;
+      transition:.2s; cursor:pointer;
+    }
+    .toggle-track::after {
+      content:''; position:absolute; left:4px; top:4px;
+      width:20px; height:20px; background:#fff; border-radius:50%;
+      transition:.2s; box-shadow:0 1px 4px rgba(0,0,0,.4);
+    }
+    .toggle input:checked + .toggle-track { background:#7C3AED; box-shadow:0 0 12px rgba(124,58,237,.45); }
+    .toggle input:checked + .toggle-track::after { transform:translateX(20px); }
+
+    /* ── Orbs ── */
+    @keyframes orbFloat {
+      0%,100% { transform: translateY(0)    scale(1); }
+      50%     { transform: translateY(-28px) scale(1.08); }
+    }
+    .orb { position:absolute; border-radius:50%; filter:blur(70px); pointer-events:none; }
+
+    /* ── Glass ── */
+    .glass {
+      background: rgba(24,24,27,.75);
+      backdrop-filter: blur(24px);
+      border: 1px solid rgba(255,255,255,.06);
+    }
+
+    /* ── Buttons ── */
+    .btn-brand {
+      background: #7C3AED;
+      transition: background .18s, box-shadow .18s, transform .1s;
+    }
+    .btn-brand:hover { background:#6D28D9; box-shadow:0 0 28px rgba(124,58,237,.5); }
+    .btn-brand:active { transform: scale(.98); }
+
+    /* ── Vote card ── */
+    .vote-card {
+      background: rgba(24,24,27,.9);
+      border: 1px solid rgba(255,255,255,.06);
+      transition: transform .14s, box-shadow .14s, background .14s, border-color .14s;
+    }
+    .vote-card:hover:not(.voted) {
+      transform: translateY(-4px);
+      box-shadow: 0 10px 30px rgba(124,58,237,.3);
+      border-color: rgba(124,58,237,.4);
+    }
+    .vote-card.selected {
+      border-color: #7C3AED !important;
+      box-shadow: 0 0 0 2px #7C3AED, 0 10px 30px rgba(124,58,237,.4) !important;
+    }
+    .vote-card.voted { opacity:.5; pointer-events:none; }
+    .vote-card.selected { opacity:1 !important; pointer-events:auto !important; }
+
+    /* ── Gradient text ── */
+    .text-gradient {
+      background: linear-gradient(135deg,#C4B5FD,#7C3AED);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* ── Progress bar ── */
+    @keyframes barGrow { from { width: 0; } }
+    .bar-grow { animation: barGrow .55s cubic-bezier(.34,1.2,.64,1) forwards; }
+
+    /* ── Pulse dots ── */
+    @keyframes pulseDot {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%     { opacity:.4; transform:scale(.7); }
+    }
+    .pulse-dot { animation: pulseDot 1.2s ease infinite; }
+
+    /* ── Toast ── */
+    @keyframes toastIn {
+      from { opacity:0; transform:translateX(-50%) translateY(8px); }
+      to   { opacity:1; transform:translateX(-50%) translateY(0);   }
+    }
+    .toast-visible { opacity:1 !important; animation:toastIn .2s ease forwards; }
+
+    /* ── Confetti ── */
+    @keyframes confettiFall {
+      0%   { transform: translateY(-10px) rotate(0deg);   opacity:1; }
+      100% { transform: translateY(110vh) rotate(720deg); opacity:0; }
+    }
+    .confetti-piece {
+      position:fixed; top:0; pointer-events:none; z-index:200;
+      animation: confettiFall linear forwards;
+    }
+
+    /* ── Trophy bounce ── */
+    @keyframes trophyBounce {
+      0%,100% { transform: translateY(0)   scale(1); }
+      50%     { transform: translateY(-12px) scale(1.05); }
+    }
+    .trophy-bounce { animation: trophyBounce 1.4s ease-in-out infinite; }
+  </style>
+</head>
+<body class="h-full bg-[#09090b] text-white font-game select-none overflow-x-hidden">
+
+  <!-- ════════════════════ LOGIN ════════════════════ -->
+  <section id="screen-login" class="screen active flex-col items-center justify-center min-h-screen p-6 gap-6 relative overflow-hidden">
+    <div class="orb w-80  h-80  bg-violet-700/40 -top-16 -left-16"   style="animation:orbFloat 7s ease-in-out infinite"></div>
+    <div class="orb w-96  h-96  bg-purple-900/50 -bottom-20 -right-20" style="animation:orbFloat 9s ease-in-out infinite reverse"></div>
+    <div class="orb w-48  h-48  bg-indigo-600/30 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" style="animation:orbFloat 5s ease-in-out infinite 1.5s"></div>
+
+    <div class="relative z-10 text-center">
+      <div class="relative inline-block">
+        <h1 class="text-6xl font-black tracking-tighter text-gradient drop-shadow-2xl">DEMOCRAZY</h1>
+        <div class="absolute -inset-4 bg-brand/10 blur-3xl rounded-full -z-10"></div>
+      </div>
+      <p class="text-zinc-500 mt-2 text-sm tracking-wide">El juego donde todos votan</p>
+    </div>
+
+    <div id="login-form" class="relative z-10 w-full max-w-sm glass rounded-3xl p-6 flex flex-col gap-4 shadow-2xl">
+      <h2 class="text-lg font-bold text-center text-zinc-200" id="login-title">Entrar al juego</h2>
+
+      <div id="existing-user-card" class="hidden bg-brand/15 border border-brand/30 rounded-2xl p-4 flex items-center gap-3 cursor-pointer hover:bg-brand/25 transition-all group" onclick="App.useExistingUser()">
+        <div class="w-11 h-11 rounded-full bg-gradient-to-br from-violet-500 to-brand-dark flex items-center justify-center font-black text-lg shadow-lg shadow-brand/30" id="existing-avatar">?</div>
+        <div class="flex-1 min-w-0">
+          <p class="text-xs text-zinc-500">Continuar como</p>
+          <p class="font-bold text-zinc-100 truncate" id="existing-name">—</p>
+        </div>
+        <svg class="w-5 h-5 text-brand-light group-hover:translate-x-1 transition-transform flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
+      </div>
+
+      <div id="new-user-toggle" class="hidden text-center">
+        <button class="text-xs text-zinc-500 hover:text-zinc-300 transition underline underline-offset-2" onclick="App.showNewUserForm()">Crear nuevo jugador</button>
+      </div>
+
+      <div id="new-user-form">
+        <input id="input-username" type="text" placeholder="Tu nombre de jugador" maxlength="20" autocomplete="off"
+          class="w-full bg-zinc-800/60 border border-zinc-700/50 rounded-2xl px-4 py-3.5 text-sm outline-none focus:ring-2 focus:ring-brand/70 focus:border-brand/50 placeholder-zinc-600 transition"
+          onkeydown="if(event.key==='Enter')App.createUser()" />
+        <p id="login-error" class="text-red-400 text-xs mt-2 hidden"></p>
+        <button onclick="App.createUser()" class="btn-brand mt-3 w-full py-3.5 rounded-2xl font-bold text-sm">
+          Empezar →
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════ LOBBY ════════════════════ -->
+  <section id="screen-lobby" class="screen flex-col items-center justify-center min-h-screen p-6 gap-6">
+    <div class="text-center">
+      <h1 class="text-5xl font-black tracking-tighter text-gradient">DEMOCRAZY</h1>
+      <p class="text-zinc-500 text-sm mt-2">Hola, <span id="lobby-username" class="text-zinc-200 font-bold"></span> 👋</p>
+    </div>
+
+    <div class="w-full max-w-sm flex flex-col gap-3">
+      <button onclick="App.createRoom()" class="btn-brand w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-2.5 shadow-xl shadow-brand/20">
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg>
+        Crear sala
+      </button>
+
+      <div class="flex items-center gap-3 text-zinc-700">
+        <div class="flex-1 h-px bg-zinc-800"></div>
+        <span class="text-xs font-medium text-zinc-600">o únete</span>
+        <div class="flex-1 h-px bg-zinc-800"></div>
+      </div>
+
+      <div class="glass rounded-2xl p-4 flex flex-col gap-3">
+        <p class="text-sm text-zinc-400 font-semibold">Código de sala</p>
+        <div class="flex gap-2">
+          <input id="input-room-code" type="text" placeholder="ABC123" maxlength="6" autocomplete="off"
+            class="flex-1 bg-zinc-800/60 border border-zinc-700/50 rounded-xl px-4 py-3 text-base uppercase tracking-[.2em] font-black outline-none focus:ring-2 focus:ring-brand/70 placeholder-zinc-700 placeholder:tracking-normal placeholder:font-normal transition"
+            oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')App.joinRoom()" />
+          <button onclick="App.joinRoom()" class="bg-zinc-700 hover:bg-zinc-600 transition px-4 rounded-xl font-bold text-sm">Ir</button>
+        </div>
+        <p id="join-error" class="text-red-400 text-xs hidden"></p>
+      </div>
+    </div>
+
+    <button onclick="App.switchUser()" class="text-xs text-zinc-600 hover:text-zinc-400 transition underline underline-offset-2">Cambiar jugador</button>
+  </section>
+
+  <!-- ════════════════════ WAITING ════════════════════ -->
+  <section id="screen-waiting" class="screen flex-col min-h-screen">
+    <div class="glass px-5 py-4 flex items-center justify-between border-b border-white/5 sticky top-0 z-10">
+      <div>
+        <p class="text-xs text-zinc-500 font-medium">Sala</p>
+        <p class="font-black text-2xl tracking-[.15em] text-gradient" id="waiting-code">—</p>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="App.shareRoom()" class="bg-zinc-800 hover:bg-zinc-700 p-2.5 rounded-xl transition" title="Compartir">
+          <svg class="w-5 h-5 text-zinc-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+        </button>
+        <button onclick="App.toggleQR()" class="bg-zinc-800 hover:bg-zinc-700 p-2.5 rounded-xl transition" title="QR">
+          <svg class="w-5 h-5 text-zinc-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div id="qr-panel" class="hidden bg-zinc-900/80 border-b border-white/5 p-5 flex justify-center items-center gap-5">
+      <div id="qr-container" class="bg-white p-3 rounded-2xl shadow-xl"></div>
+      <div>
+        <p class="font-bold text-zinc-200 text-sm mb-1">Escanea para unirte</p>
+        <p class="text-xs text-zinc-500 leading-relaxed">Código: <span class="text-brand-light font-bold" id="qr-code-label"></span></p>
+      </div>
+    </div>
+
+    <div id="admin-settings" class="hidden border-b border-white/5">
+      <div class="px-5 pt-5 pb-2 flex items-center gap-2">
+        <div class="w-1 h-4 bg-brand rounded-full"></div>
+        <p class="text-xs text-zinc-400 font-bold uppercase tracking-wider">Configuración</p>
+      </div>
+
+      <div class="mx-4 mb-2 glass rounded-2xl">
+        <div class="flex items-center justify-between px-4 py-3.5">
+          <div>
+            <p class="text-sm font-semibold">Rondas</p>
+            <p class="text-xs text-zinc-500 mt-0.5">Número de preguntas</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button onclick="App.adjRounds(-1)" class="w-9 h-9 rounded-xl bg-zinc-700/60 hover:bg-zinc-600 flex items-center justify-center text-lg font-bold text-zinc-300 transition active:scale-90">−</button>
+            <span id="cfg-rounds-display" class="w-8 text-center font-black text-gradient text-xl">5</span>
+            <button onclick="App.adjRounds(1)"  class="w-9 h-9 rounded-xl bg-zinc-700/60 hover:bg-zinc-600 flex items-center justify-center text-lg font-bold text-zinc-300 transition active:scale-90">+</button>
+            <input id="cfg-rounds" type="hidden" value="5" />
+          </div>
+        </div>
+      </div>
+
+      <div class="mx-4 mb-4 glass rounded-2xl overflow-hidden divide-y divide-white/5">
+        <label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition">
+          <div>
+            <p class="text-sm font-semibold">Puntuación</p>
+            <p class="text-xs text-zinc-500 mt-0.5">Los jugadores acumulan puntos</p>
+          </div>
+          <span class="toggle"><input id="cfg-points" type="checkbox" checked /><span class="toggle-track"></span></span>
+        </label>
+        <label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition">
+          <div>
+            <p class="text-sm font-semibold">Voto secreto</p>
+            <p class="text-xs text-zinc-500 mt-0.5">No se ve quién votó a quién</p>
+          </div>
+          <span class="toggle"><input id="cfg-private" type="checkbox" /><span class="toggle-track"></span></span>
+        </label>
+        <label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition">
+          <div>
+            <p class="text-sm font-semibold">Usar preguntas</p>
+            <p class="text-xs text-zinc-500 mt-0.5">Preguntas predefinidas del juego</p>
+          </div>
+          <span class="toggle"><input id="cfg-questions" type="checkbox" checked /><span class="toggle-track"></span></span>
+        </label>
+        <label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition">
+          <div>
+            <p class="text-sm font-semibold">Pregunta visible</p>
+            <p class="text-xs text-zinc-500 mt-0.5" id="cfg-visible-hint">Todos ven la pregunta</p>
+          </div>
+          <span class="toggle"><input id="cfg-visible" type="checkbox" checked oninput="App.updateVisibleHint()" /><span class="toggle-track"></span></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="flex-1 p-5 overflow-y-auto">
+      <p class="text-xs text-zinc-500 font-bold uppercase tracking-wider mb-3">Jugadores (<span id="waiting-count">0</span>)</p>
+      <div id="waiting-players" class="flex flex-col gap-2"></div>
+    </div>
+
+    <div class="p-5 border-t border-white/5">
+      <div id="admin-start" class="hidden">
+        <button onclick="App.startGame()" class="btn-brand w-full py-4 rounded-2xl font-bold text-base shadow-xl shadow-brand/20">
+          ¡Comenzar partida! 🚀
+        </button>
+      </div>
+      <div id="guest-wait" class="hidden text-center text-zinc-500 text-sm py-3">
+        <div class="flex items-center justify-center gap-2.5">
+          <span class="flex gap-1">
+            <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block"></span>
+            <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block" style="animation-delay:.2s"></span>
+            <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block" style="animation-delay:.4s"></span>
+          </span>
+          Esperando al administrador...
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════ GAME ════════════════════ -->
+  <section id="screen-game" class="screen flex-col min-h-screen">
+    <div class="glass px-5 py-3 flex items-center justify-between border-b border-white/5 sticky top-0 z-10">
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-zinc-500 font-medium">Ronda</span>
+        <span class="font-black text-brand-light"><span id="game-round">1</span><span class="text-zinc-700">/</span><span id="game-rounds">5</span></span>
+      </div>
+      <div id="game-scores-header" class="flex gap-3 overflow-x-auto max-w-xs"></div>
+    </div>
+
+    <!-- Round progress bar -->
+    <div class="h-1 bg-zinc-800">
+      <div id="round-progress" class="h-full bg-gradient-to-r from-brand to-violet-400 transition-all duration-500" style="width:0%"></div>
+    </div>
+
+    <div class="px-5 py-7 text-center">
+      <div id="question-inventor" class="hidden bg-brand/15 border border-brand/30 rounded-xl px-4 py-2.5 text-sm text-brand-light mb-4 inline-flex items-center gap-2">
+        <span>✨</span>
+        <span><span id="inventor-name" class="font-bold"></span> elige la pregunta</span>
+      </div>
+      <p id="game-question" class="text-2xl font-bold leading-snug text-zinc-100"></p>
+    </div>
+
+    <div class="flex-1 px-4 pb-4">
+      <p class="text-xs text-zinc-600 text-center mb-4 font-medium uppercase tracking-wider">¿A quién votarías?</p>
+      <div id="vote-grid" class="grid grid-cols-2 gap-3"></div>
+    </div>
+
+    <div class="p-5 border-t border-white/5 text-center">
+      <p id="votes-status" class="text-sm text-zinc-500"></p>
+      <p id="voted-feedback" class="hidden text-sm text-brand-light font-bold">✓ Voto registrado</p>
+    </div>
+  </section>
+
+  <!-- ════════════════════ REVEAL ════════════════════ -->
+  <section id="screen-reveal" class="screen flex-col min-h-screen">
+    <div class="glass px-5 py-4 border-b border-white/5 text-center sticky top-0 z-10">
+      <p class="text-xs text-zinc-500 font-bold uppercase tracking-widest">Ronda <span id="reveal-round">1</span> — Resultados</p>
+    </div>
+
+    <div class="flex-1 p-5 overflow-y-auto">
+      <p id="reveal-question" class="text-center text-zinc-400 text-sm mb-6 italic font-medium px-2"></p>
+      <div id="reveal-results" class="flex flex-col gap-3"></div>
+    </div>
+
+    <div class="p-5 border-t border-white/5">
+      <div id="admin-next" class="hidden">
+        <button onclick="App.nextRound()" class="btn-brand w-full py-4 rounded-2xl font-bold text-base shadow-lg shadow-brand/20" id="next-round-btn">
+          Siguiente ronda →
+        </button>
+      </div>
+      <div id="guest-next-wait" class="hidden text-center text-zinc-500 text-sm py-3">
+        <div class="flex items-center justify-center gap-2.5">
+          <span class="flex gap-1">
+            <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block"></span>
+            <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block" style="animation-delay:.2s"></span>
+            <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block" style="animation-delay:.4s"></span>
+          </span>
+          Esperando siguiente ronda...
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════════════ FINAL ════════════════════ -->
+  <section id="screen-final" class="screen flex-col items-center min-h-screen p-6 gap-5 relative overflow-hidden">
+    <div id="confetti-container" aria-hidden="true"></div>
+
+    <div class="text-center mt-8 relative z-10">
+      <p class="text-xs text-zinc-500 uppercase tracking-widest font-bold">Fin de la partida</p>
+      <div class="text-7xl my-4 trophy-bounce">🏆</div>
+      <p class="text-xs text-zinc-500 uppercase tracking-widest font-bold mb-1">Ganador</p>
+      <p class="text-3xl font-black text-gradient" id="winner-name">—</p>
+    </div>
+
+    <div class="w-full max-w-sm flex flex-col gap-2 relative z-10">
+      <p class="text-xs text-zinc-500 uppercase tracking-wider font-bold text-center mb-1">Clasificación final</p>
+      <div id="final-scores" class="flex flex-col gap-2"></div>
+    </div>
+
+    <div id="admin-new-game" class="hidden w-full max-w-sm relative z-10">
+      <button onclick="App.newGame()" class="btn-brand w-full py-4 rounded-2xl font-bold text-base shadow-lg shadow-brand/20">
+        Nueva partida 🎮
+      </button>
+    </div>
+    <div id="guest-end-wait" class="hidden text-center text-zinc-500 text-sm relative z-10">
+      <div class="flex items-center justify-center gap-2.5">
+        <span class="flex gap-1">
+          <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block"></span>
+          <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block" style="animation-delay:.2s"></span>
+          <span class="w-1.5 h-1.5 bg-brand rounded-full pulse-dot inline-block" style="animation-delay:.4s"></span>
+        </span>
+        Esperando nueva partida...
+      </div>
+    </div>
+
+    <button onclick="App.exitToLobby()" class="text-xs text-zinc-600 hover:text-zinc-400 transition underline underline-offset-2 relative z-10">Salir al menú</button>
+  </section>
+
+  <!-- ════════════════════ TOAST ════════════════════ -->
+  <div id="toast" class="fixed bottom-6 left-1/2 -translate-x-1/2 glass text-white px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl opacity-0 transition-opacity duration-300 pointer-events-none z-50 whitespace-nowrap border border-white/10 flex items-center gap-2"></div>
+
+  <script src="js/GameAPI.js"></script>
+  <script src="js/questions.js"></script>
+  <script src="js/game.js" type="module"></script>
+</body>
+</html>
