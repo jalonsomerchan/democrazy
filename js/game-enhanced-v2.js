@@ -70,6 +70,10 @@ window.addEventListener('popstate', e => {
   byId(`screen-${screen}`)?.classList.add('active');
 });
 
+window.addEventListener('keydown', event => {
+  if (event.key === 'Escape') App.closeShareModal?.();
+});
+
 function toast(msg, icon = '') {
   const el = byId('toast');
   if (!el) return;
@@ -88,14 +92,16 @@ function toast(msg, icon = '') {
 }
 
 function renderQR(url) {
-  const c = byId('qr-container');
-  if (!c) return;
-  const img = document.createElement('img');
-  img.src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(url)}`;
-  img.className = 'rounded-lg';
-  img.width = img.height = 180;
-  c.innerHTML = '';
-  c.appendChild(img);
+  const targets = [byId('qr-container'), byId('share-modal-qr')].filter(Boolean);
+  targets.forEach(c => {
+    const img = document.createElement('img');
+    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(url)}`;
+    img.className = 'rounded-2xl w-48 h-48 sm:w-56 sm:h-56';
+    img.width = img.height = 220;
+    img.alt = 'QR para unirse a la sala';
+    c.innerHTML = '';
+    c.appendChild(img);
+  });
 }
 
 function launchConfetti() {
@@ -179,6 +185,23 @@ function currentScreen() {
   return document.querySelector('.screen.active')?.id?.replace('screen-', '') ?? 'waiting';
 }
 
+function playerLabel(player) {
+  return String(player?.id ?? '') === sid() ? 'Tú' : String(player?.username ?? '?');
+}
+
+function getShareUrl() {
+  return `${location.origin}${location.pathname}?sala=${encodeURIComponent(state.room?.code ?? '')}`;
+}
+
+function roomCodeFromHash(hash = location.hash) {
+  const match = String(hash || '').match(/^#\/(?:sala|juego|resultados|final)(?:\/([A-Z0-9_-]+))?/i);
+  return match?.[1] ? match[1].toUpperCase() : '';
+}
+
+function routeCanRestoreRoom(hash = location.hash) {
+  return /^#\/(sala|juego|resultados|final)(\/|$)/.test(String(hash || ''));
+}
+
 function applyGameState(gameState = {}) {
   state.hostId = String(gameState.hostId ?? state.hostId ?? '');
   state.isHost = state.hostId ? sid() === state.hostId : state.isHost;
@@ -213,6 +236,9 @@ function getSavedSession() {
 }
 
 function injectDynamicUI() {
+  if (!byId('share-modal')) {
+    document.body.insertAdjacentHTML('beforeend', `<div id="share-modal" class="hidden fixed inset-0 z-[80] px-4 py-6 flex items-center justify-center"><button type="button" class="absolute inset-0 bg-black/75 backdrop-blur-sm" onclick="App.closeShareModal()" aria-label="Cerrar compartir"></button><div class="relative w-full max-w-sm glass rounded-[2rem] border border-white/10 shadow-2xl p-5 pop"><div class="flex items-start justify-between gap-3 mb-4"><div><p class="text-xs text-zinc-500 font-bold uppercase tracking-widest">Compartir sala</p><h2 class="text-2xl font-black text-gradient tracking-tight">Código <span id="share-room-code">—</span></h2></div><button type="button" onclick="App.closeShareModal()" class="w-10 h-10 rounded-2xl bg-zinc-800 hover:bg-zinc-700 transition flex items-center justify-center text-zinc-300 text-xl" aria-label="Cerrar">×</button></div><div class="bg-white p-3 rounded-[1.5rem] w-fit mx-auto shadow-xl" id="share-modal-qr"></div><p class="text-center text-xs text-zinc-500 mt-3 mb-4">Escanea el QR o comparte el enlace con el móvil.</p><label class="block text-xs text-zinc-500 font-bold uppercase tracking-wider mb-2" for="share-link-input">Enlace de invitación</label><div class="flex gap-2"><input id="share-link-input" readonly class="min-w-0 flex-1 bg-zinc-900/80 border border-zinc-700/70 rounded-2xl px-3 py-3 text-xs text-zinc-300 outline-none" value="" /><button type="button" onclick="App.copyShareLink()" class="bg-zinc-800 hover:bg-zinc-700 px-4 rounded-2xl font-bold text-sm transition">Copiar</button></div><button type="button" id="native-share-button" onclick="App.shareViaWebShare()" class="btn-brand mt-3 w-full py-3.5 rounded-2xl font-bold text-sm shadow-lg shadow-brand/20">Compartir con el móvil</button></div></div>`);
+  }
   if (!byId('cfg-round-time')) {
     const roundsCard = byId('cfg-rounds')?.closest('.glass');
     roundsCard?.insertAdjacentHTML('afterend', `<div id="round-time-card" class="mx-4 mb-2 glass rounded-2xl"><div class="flex items-center justify-between gap-3 px-4 py-3.5"><div><p class="text-sm font-semibold">Tiempo por ronda</p><p class="text-xs text-zinc-500 mt-0.5">Evita que la partida se quede bloqueada</p></div><select id="cfg-round-time" class="bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"><option value="0">Sin límite</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></div></div>`);
@@ -224,7 +250,7 @@ function injectDynamicUI() {
   if (!byId('democrazy-enhanced-style')) {
     const style = document.createElement('style');
     style.id = 'democrazy-enhanced-style';
-    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}`;
+    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}@media(max-width:640px){:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
     document.head.appendChild(style);
   }
 }
@@ -438,11 +464,12 @@ window.App = {
   init() {
     injectDynamicUI();
     const params = new URLSearchParams(location.search);
-    const code = params.get('sala') || params.get('room');
+    const hashCode = roomCodeFromHash(location.hash);
+    const code = (params.get('sala') || params.get('room') || hashCode || '').toUpperCase();
     const savedSession = getSavedSession();
-    const hashAllowsReconnect = /^#\/(sala|juego|resultados|final)(\/|$)/.test(location.hash);
+    const canRestoreFromRoute = routeCanRestoreRoom(location.hash);
 
-    if (savedSession && !code && !hashAllowsReconnect) {
+    if (savedSession && !code && !canRestoreFromRoute) {
       clearActiveSession();
     }
 
@@ -460,11 +487,12 @@ window.App = {
       } catch { localStorage.removeItem('democrazy_user'); }
     }
 
-    if (code) sessionStorage.setItem('pending_room', code.toUpperCase());
-    history.replaceState({ screen: 'login' }, '', '#/');
+    if (code) sessionStorage.setItem('pending_room', code);
+    if (!code && !canRestoreFromRoute) history.replaceState({ screen: 'login' }, '', '#/');
 
-    if (state.user && (code || hashAllowsReconnect)) {
-      setTimeout(() => App._enterLobby({ restoreSavedRoom: hashAllowsReconnect && !code }), 0);
+    if (state.user && (code || canRestoreFromRoute)) {
+      const shouldReconnect = Boolean(savedSession?.roomCode && (!code || savedSession.roomCode === code) && canRestoreFromRoute);
+      setTimeout(() => App._enterLobby({ restoreSavedRoom: shouldReconnect }), 0);
     }
   },
 
@@ -514,19 +542,22 @@ window.App = {
     byId('lobby-username').textContent = state.user.username;
     showScreen('lobby');
     const pending = sessionStorage.getItem('pending_room');
+    const savedRoom = restoreSavedRoom ? getSavedSession() : null;
+    if (savedRoom && (!pending || savedRoom.roomCode === pending)) {
+      if (pending) sessionStorage.removeItem('pending_room');
+      await App.reconnectRoom(savedRoom.roomCode);
+      return;
+    }
     if (pending) {
       sessionStorage.removeItem('pending_room');
       byId('input-room-code').value = pending;
       await App.joinRoom();
       return;
     }
-    const savedRoom = restoreSavedRoom ? getSavedSession() : null;
-    if (savedRoom) await App.reconnectRoom(savedRoom.roomCode);
   },
 
   async reconnectRoom(code) {
     try {
-      toast('Reconectando a la sala...', '🔄');
       const roomData = await api.getRoom(code);
       const gameState = extractGameState(roomData);
       state.room = { code, id: String(roomData.id ?? roomData.room_id ?? getSavedSession()?.roomId ?? '') };
@@ -543,7 +574,6 @@ window.App = {
       if ((roomData.status === 'playing' || gameState.status === 'playing') && state.currentRound && (state.currentQuestion || state.currentInventorId)) _startRound({ roundNum: state.currentRound, question: state.currentQuestion, inventorId: state.currentInventorId });
       else if ((roomData.status === 'finished' || gameState.status === 'finished') && Object.keys(state.scores).length) _showFinal();
       else App._enterWaiting();
-      toast('Has vuelto a la sala', '✅');
     } catch (error) {
       clearActiveSession();
       console.warn('No se pudo reconectar a la sala', error);
@@ -620,22 +650,54 @@ window.App = {
       App.updateVisibleHint();
     }
     renderWaitingPlayers();
-    renderQR(`${location.origin}${location.pathname}?sala=${state.room.code}`);
+    renderQR(getShareUrl());
     saveActiveSession();
     showScreen('waiting');
     history.replaceState({ screen: 'waiting' }, '', `#/sala/${state.room.code}`);
   },
 
-  toggleQR() { byId('qr-panel').classList.toggle('hidden'); },
+  toggleQR() { App.openShareModal(); },
 
-  async shareRoom() {
-    const url = `${location.origin}${location.pathname}?sala=${state.room.code}`;
-    if (navigator.share) {
-      try { await navigator.share({ title: 'Democrazy', text: `Únete con código: ${state.room.code}`, url }); } catch {}
-    } else {
-      navigator.clipboard.writeText(url);
+  shareRoom() { App.openShareModal(); },
+
+  openShareModal() {
+    const modal = byId('share-modal');
+    if (!modal || !state.room?.code) return;
+    const url = getShareUrl();
+    byId('share-room-code').textContent = state.room.code;
+    const input = byId('share-link-input');
+    if (input) input.value = url;
+    byId('native-share-button')?.classList.toggle('hidden', !navigator.share);
+    renderQR(url);
+    modal.classList.remove('hidden');
+    document.body.classList.add('overflow-hidden');
+    setTimeout(() => input?.select?.(), 40);
+  },
+
+  closeShareModal() {
+    byId('share-modal')?.classList.add('hidden');
+    document.body.classList.remove('overflow-hidden');
+  },
+
+  async copyShareLink() {
+    const url = getShareUrl();
+    try {
+      await navigator.clipboard.writeText(url);
       toast('Enlace copiado', '📋');
+    } catch {
+      const input = byId('share-link-input');
+      input?.select?.();
+      toast('Copia el enlace seleccionado', '📋');
     }
+  },
+
+  async shareViaWebShare() {
+    const url = getShareUrl();
+    if (!navigator.share) return App.copyShareLink();
+    try {
+      await navigator.share({ title: 'Democrazy', text: `Únete con código: ${state.room.code}`, url });
+      App.closeShareModal();
+    } catch {}
   },
 
   adjRounds(delta) {
@@ -987,7 +1049,7 @@ function _showReveal(roundNum, question) {
     const key = String(votedId);
     if (!voteCounts[key]) voteCounts[key] = [];
     const voter = state.players.find(p => p.id === String(voterId));
-    voteCounts[key].push(voter?.username ?? '?');
+    voteCounts[key].push(playerLabel(voter));
   });
   const sorted = [...state.players].sort((a, b) => (voteCounts[b.id]?.length || 0) - (voteCounts[a.id]?.length || 0));
   const maxVotes = Math.max(...sorted.map(p => voteCounts[p.id]?.length || 0), 1);
@@ -997,7 +1059,8 @@ function _showReveal(roundNum, question) {
     const isTop = i === 0 && voters.length > 0;
     const barPct = Math.round((voters.length / maxVotes) * 100);
     const pts = state.scores[p.id] || 0;
-    return `<div class="glass rounded-2xl p-4 pop" style="animation-delay:${i * .09}s"><div class="flex items-center gap-3 mb-2.5"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black shadow-md flex-shrink-0">${initials(p.username)}</div><div class="flex-1 min-w-0"><p class="font-bold truncate">${escapeHTML(p.username)}${isTop ? ' 👑' : ''}</p><p class="text-xs text-zinc-500">${voters.length} voto${voters.length !== 1 ? 's' : ''}</p></div>${state.settings.points ? `<span class="font-black text-brand-light text-lg flex-shrink-0">${pts}pts</span>` : ''}</div><div class="h-1.5 bg-zinc-800 rounded-full overflow-hidden"><div class="h-full bg-gradient-to-r from-brand to-violet-400 rounded-full bar-grow" style="width:${barPct}%"></div></div>${!state.settings.privateVote && voters.length ? `<div class="mt-2 flex flex-wrap gap-1">${voters.map(v => `<span class="text-xs bg-zinc-800 px-2 py-0.5 rounded-full text-zinc-400">${escapeHTML(v)}</span>`).join('')}</div>` : ''}</div>`;
+    const name = playerLabel(p);
+    return `<div class="glass rounded-2xl p-4 pop" style="animation-delay:${i * .09}s"><div class="flex items-center gap-3 mb-2.5"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black shadow-md flex-shrink-0">${initials(p.username)}</div><div class="flex-1 min-w-0"><p class="font-bold truncate">${escapeHTML(name)}${isTop ? ' 👑' : ''}</p><p class="text-xs text-zinc-500">${voters.length} voto${voters.length !== 1 ? 's' : ''}</p></div>${state.settings.points ? `<span class="font-black text-brand-light text-lg flex-shrink-0">${pts}pts</span>` : ''}</div><div class="h-1.5 bg-zinc-800 rounded-full overflow-hidden"><div class="h-full bg-gradient-to-r from-brand to-violet-400 rounded-full bar-grow" style="width:${barPct}%"></div></div>${!state.settings.privateVote && voters.length ? `<div class="mt-2 flex flex-wrap gap-1">${voters.map(v => `<span class="text-xs bg-zinc-800 px-2 py-0.5 rounded-full text-zinc-400">${escapeHTML(v)}</span>`).join('')}</div>` : ''}</div>`;
   }).join('');
   byId('admin-next').classList.toggle('hidden', !state.isHost);
   byId('guest-next-wait').classList.toggle('hidden', state.isHost);
@@ -1010,8 +1073,8 @@ function _showFinal() {
   stopTimer();
   launchConfetti();
   const sorted = [...state.players].sort((a, b) => (state.scores[b.id] || 0) - (state.scores[a.id] || 0));
-  byId('winner-name').textContent = sorted[0]?.username ?? '—';
-  byId('final-scores').innerHTML = sorted.map((p, i) => `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3.5 pop" style="animation-delay:${i * .08}s"><span class="text-2xl flex-shrink-0">${['🥇', '🥈', '🥉'][i] ?? `${i + 1}.`}</span><div class="w-9 h-9 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-sm shadow-md flex-shrink-0">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${escapeHTML(p.username)}</span><span class="font-black text-gradient text-lg">${state.scores[p.id] || 0}pts</span></div>`).join('');
+  byId('winner-name').textContent = sorted[0] ? playerLabel(sorted[0]) : '—';
+  byId('final-scores').innerHTML = sorted.map((p, i) => `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3.5 pop" style="animation-delay:${i * .08}s"><span class="text-2xl flex-shrink-0">${['🥇', '🥈', '🥉'][i] ?? `${i + 1}.`}</span><div class="w-9 h-9 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-sm shadow-md flex-shrink-0">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${escapeHTML(playerLabel(p))}</span><span class="font-black text-gradient text-lg">${state.scores[p.id] || 0}pts</span></div>`).join('');
   byId('admin-new-game').classList.toggle('hidden', !state.isHost);
   byId('guest-end-wait').classList.toggle('hidden', state.isHost);
   persistGameState({ status: 'finished' });
