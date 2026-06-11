@@ -1,6 +1,6 @@
 # Democrazy
 
-Party game web multijugador donde aparece una pregunta, todos votan a qué jugador le pega más y se revelan resultados por ronda.
+Party game web multijugador donde aparece una pregunta, todos votan a qué jugador le pega más y se revelan resultados por ronda. La partida usa preguntas infinitas y solo termina cuando el administrador pulsa **Fin del juego**.
 
 ## Stack técnico
 
@@ -51,7 +51,9 @@ Incluye:
 - temporizador controlado solo por host,
 - validación de mínimo 2 jugadores,
 - cambio de sala al iniciar nueva partida,
-- renderizado de preguntas, categorías, votos, resultados y final.
+- renderizado de preguntas, categorías, votos y resultados,
+- modo de preguntas infinitas,
+- cierre de sala para todos al pulsar **Fin del juego**.
 
 ### `js/questions.js`
 
@@ -75,7 +77,8 @@ Evita abrir con `file://`.
 
 ```js
 {
-  rounds: 5,
+  rounds: 0,
+  infiniteMode: true,
   points: true,
   privateVote: false,
   useQuestions: true,
@@ -87,7 +90,8 @@ Evita abrir con `file://`.
 
 | Opción | Descripción |
 |---|---|
-| `rounds` | Número de rondas |
+| `rounds` | `0` en modo infinito; se mantiene por compatibilidad |
+| `infiniteMode` | La partida no termina sola; el admin debe pulsar **Fin del juego** |
 | `points` | Activa/desactiva puntuación |
 | `privateVote` | Oculta quién votó a quién |
 | `useQuestions` | Usa preguntas predefinidas |
@@ -104,5 +108,7 @@ Evita abrir con `file://`.
 - Si falla `itty-sockets`, se usa polling real contra la API en lugar de `BroadcastChannel` local.
 - La reconexión restaura jugadores, settings, ronda, pregunta, votos y puntuaciones desde `game_state`.
 - Las preguntas están agrupadas por categorías seleccionables por el host antes de empezar.
+- La partida avanza indefinidamente hasta que el administrador cierra la sala.
+- Al pulsar **Fin del juego**, todos los jugadores salen de la sala y se borra la sesión activa.
 - La etiqueta de host usa `hostId`, no la posición del jugador en el array.
 - El cliente API soporta respuestas vacías o no JSON sin romper el flujo de error.

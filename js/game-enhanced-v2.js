@@ -13,6 +13,7 @@ const state = {
   players: [],
   settings: {
     rounds: 5,
+    infiniteMode: true,
     points: true,
     privateVote: false,
     useQuestions: true,
@@ -166,6 +167,7 @@ function normalizeQuestionCategories(value) {
 function normalizeSettings(settings = {}) {
   return {
     rounds: Number(settings.rounds ?? 5),
+    infiniteMode: settings.infiniteMode ?? true,
     points: settings.points ?? true,
     privateVote: settings.privateVote ?? false,
     useQuestions: settings.useQuestions ?? true,
@@ -345,9 +347,20 @@ function injectDynamicUI() {
   if (!byId('share-modal')) {
     document.body.insertAdjacentHTML('beforeend', `<div id="share-modal" class="hidden fixed inset-0 z-[80] px-4 py-6 flex items-center justify-center"><button type="button" class="absolute inset-0 bg-black/75 backdrop-blur-sm" onclick="App.closeShareModal()" aria-label="Cerrar compartir"></button><div class="relative w-full max-w-sm glass rounded-[2rem] border border-white/10 shadow-2xl p-5 pop"><div class="flex items-start justify-between gap-3 mb-4"><div><p class="text-xs text-zinc-500 font-bold uppercase tracking-widest">Compartir sala</p><h2 class="text-2xl font-black text-gradient tracking-tight">Código <span id="share-room-code">—</span></h2></div><button type="button" onclick="App.closeShareModal()" class="w-10 h-10 rounded-2xl bg-zinc-800 hover:bg-zinc-700 transition flex items-center justify-center text-zinc-300 text-xl" aria-label="Cerrar">×</button></div><div class="bg-white p-3 rounded-[1.5rem] w-fit mx-auto shadow-xl" id="share-modal-qr"></div><p class="text-center text-xs text-zinc-500 mt-3 mb-4">Escanea el QR o comparte el enlace con el móvil.</p><label class="block text-xs text-zinc-500 font-bold uppercase tracking-wider mb-2" for="share-link-input">Enlace de invitación</label><div class="flex gap-2"><input id="share-link-input" readonly class="min-w-0 flex-1 bg-zinc-900/80 border border-zinc-700/70 rounded-2xl px-3 py-3 text-xs text-zinc-300 outline-none" value="" /><button type="button" onclick="App.copyShareLink()" class="bg-zinc-800 hover:bg-zinc-700 px-4 rounded-2xl font-bold text-sm transition">Copiar</button></div><button type="button" id="native-share-button" onclick="App.shareViaWebShare()" class="btn-brand mt-3 w-full py-3.5 rounded-2xl font-bold text-sm shadow-lg shadow-brand/20">Compartir con el móvil</button></div></div>`);
   }
+  const roundsCard = byId('cfg-rounds')?.closest('.glass');
+  if (roundsCard && !roundsCard.dataset.infiniteModeNotice) {
+    roundsCard.dataset.infiniteModeNotice = '1';
+    roundsCard.innerHTML = `<div class="px-4 py-3.5"><div class="flex items-center justify-between gap-3"><div><p class="text-sm font-semibold">Preguntas infinitas</p><p class="text-xs text-zinc-500 mt-0.5">La partida sigue hasta que el admin pulse Fin del juego</p></div><span class="text-2xl font-black text-gradient">∞</span></div></div>`;
+  }
   if (!byId('cfg-round-time')) {
-    const roundsCard = byId('cfg-rounds')?.closest('.glass');
     roundsCard?.insertAdjacentHTML('afterend', `<div id="round-time-card" class="mx-4 mb-2 glass rounded-2xl"><div class="flex items-center justify-between gap-3 px-4 py-3.5"><div><p class="text-sm font-semibold">Tiempo por ronda</p><p class="text-xs text-zinc-500 mt-0.5">Evita que la partida se quede bloqueada</p></div><select id="cfg-round-time" class="bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"><option value="0">Sin límite</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></div></div>`);
+  }
+  if (!byId('admin-force-end')) {
+    byId('admin-next')?.insertAdjacentHTML('beforeend', `<button id="admin-force-end" type="button" onclick="App.endGameForEveryone()" class="mt-3 w-full bg-red-500/15 hover:bg-red-500/25 border border-red-400/30 text-red-100 py-3 rounded-2xl font-black text-sm uppercase tracking-widest transition">Fin del juego</button>`);
+  }
+  if (!byId('admin-game-force-end')) {
+    const gameFooter = byId('votes-status')?.parentElement;
+    gameFooter?.insertAdjacentHTML('afterend', `<button id="admin-game-force-end" type="button" onclick="App.endGameForEveryone()" class="hidden mx-5 mb-4 bg-red-500/15 hover:bg-red-500/25 border border-red-400/30 text-red-100 py-3 rounded-2xl font-black text-sm uppercase tracking-widest transition">Fin del juego</button>`);
   }
   if (!byId('question-categories-card')) {
     const questionsCard = byId('cfg-questions')?.closest('.glass');
@@ -366,6 +379,13 @@ function injectDynamicUI() {
     const style = document.createElement('style');
     style.id = 'democrazy-enhanced-style';
     style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}@keyframes epicFlash{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.035)}}@keyframes epicCrownDrop{0%{opacity:0;transform:translateY(-28px) scale(.6) rotate(-10deg)}60%{opacity:1;transform:translateY(4px) scale(1.16) rotate(5deg)}100%{opacity:1;transform:translateY(0) scale(1) rotate(0)}}@keyframes epicNameReveal{0%{opacity:0;filter:blur(16px);letter-spacing:.35em;transform:translateY(18px) scale(.92)}70%{opacity:1;filter:blur(0);letter-spacing:.05em;transform:translateY(-3px) scale(1.04)}100%{opacity:1;filter:blur(0);letter-spacing:.02em;transform:translateY(0) scale(1)}}@keyframes epicCardIn{0%{opacity:0;transform:translateY(22px) scale(.94);filter:blur(10px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}@keyframes epicGlowSweep{0%{transform:translateX(-130%) skewX(-20deg)}100%{transform:translateX(130%) skewX(-20deg)}}.epic-reveal-stage{position:relative;overflow:hidden}.epic-reveal-stage:before{content:'';position:absolute;inset:-40%;background:radial-gradient(circle at 50% 20%,rgba(124,58,237,.32),transparent 34%),radial-gradient(circle at 15% 85%,rgba(245,158,11,.18),transparent 28%);pointer-events:none;animation:epicFlash 2.3s ease-in-out infinite}.epic-reveal-content{position:relative;z-index:1}.epic-winner-name{animation:epicNameReveal .95s cubic-bezier(.18,1.35,.32,1) both;text-shadow:0 0 26px rgba(167,139,250,.55)}.epic-crown{animation:epicCrownDrop .8s cubic-bezier(.18,1.35,.32,1) both}.epic-result-card{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both;position:relative;overflow:hidden}.epic-result-card:after{content:'';position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:epicGlowSweep 1.05s ease-out .15s both;pointer-events:none}.epic-dots span{animation:epicFlash 1s ease-in-out infinite}.epic-dots span:nth-child(2){animation-delay:.15s}.epic-dots span:nth-child(3){animation-delay:.3s}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
+    document.head.appendChild(style);
+  }
+
+  if (!byId('democrazy-room-ended-style')) {
+    const style = document.createElement('style');
+    style.id = 'democrazy-room-ended-style';
+    style.textContent = `.room-ended-flash{position:fixed;inset:0;z-index:90;display:flex;align-items:center;justify-content:center;background:rgba(9,9,11,.94);backdrop-filter:blur(18px);animation:epicCardIn .35s ease both}.room-ended-flash>div{max-width:22rem;margin:1rem;text-align:center}`;
     document.head.appendChild(style);
   }
 }
@@ -474,7 +494,7 @@ function emit(data) {
   const event = { ...data, id: data.id || `${Date.now()}-${Math.random().toString(16).slice(2)}` };
   if (state.socketReady && state.socket?.send) state.socket.send(JSON.stringify(event));
   else if (!state.pollingTimer) state.pendingMessages.push(event);
-  persistGameState({ latestEvent: event, status: event.type === 'game_over' ? 'finished' : undefined });
+  persistGameState({ latestEvent: event, status: event.type === 'room_closed' ? 'closed' : (event.type === 'game_over' ? 'finished' : undefined) });
 }
 
 function handleSocketMessage(data, { fromPoll = false } = {}) {
@@ -554,6 +574,9 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.scores = data.scores ?? {};
       persistGameState({ status: 'finished' });
       _showFinal();
+      break;
+    case 'room_closed':
+      closeRoomLocally(data.reason || 'El administrador ha terminado la partida.');
       break;
     case 'new_room_created':
       stopTimer();
@@ -706,6 +729,10 @@ window.App = {
       state.players = rawPlayers.map(normPlayer);
       upsertPlayer(currentPlayer());
       state.settings = normalizeSettings(roomData.room_settings ?? roomData.settings ?? gameState.settings ?? state.settings);
+      if (roomData.status === 'closed' || gameState.status === 'closed') {
+        closeRoomLocally('Esta sala ya ha terminado.');
+        return;
+      }
       await connectSocket(code);
       emit({ type: 'player_joined', player: currentPlayer() });
       saveActiveSession();
@@ -726,7 +753,7 @@ window.App = {
       btn.disabled = true;
     }
     try {
-      const settings = normalizeSettings({ rounds: 5, points: true, privateVote: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
+      const settings = normalizeSettings({ rounds: 0, infiniteMode: true, points: true, privateVote: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -760,6 +787,11 @@ window.App = {
       await api.joinRoom(code, sid());
       const roomData = await api.getRoom(code);
       const gameState = extractGameState(roomData);
+      if (roomData.status === 'closed' || gameState.status === 'closed') {
+        if (errEl) { errEl.textContent = 'Esta sala ya ha terminado.'; errEl.classList.remove('hidden'); }
+        clearActiveSession();
+        return;
+      }
       state.room = { code, id: String(roomData.id ?? roomData.room_id ?? '') };
       state.hostId = roomHostId(roomData, gameState.hostId);
       state.isHost = sid() === state.hostId;
@@ -788,8 +820,8 @@ window.App = {
     byId('guest-wait').classList.toggle('hidden', state.isHost);
     if (state.isHost) {
       const s = normalizeSettings(state.settings);
-      byId('cfg-rounds').value = s.rounds;
-      byId('cfg-rounds-display').textContent = s.rounds;
+      if (byId('cfg-rounds')) byId('cfg-rounds').value = s.rounds || 0;
+      if (byId('cfg-rounds-display')) byId('cfg-rounds-display').textContent = '∞';
       byId('cfg-points').checked = s.points;
       byId('cfg-private').checked = s.privateVote;
       byId('cfg-questions').checked = s.useQuestions;
@@ -914,7 +946,8 @@ window.App = {
       return;
     }
     const settings = normalizeSettings({
-      rounds: parseInt(byId('cfg-rounds').value) || 5,
+      rounds: 0,
+      infiniteMode: true,
       points: byId('cfg-points').checked,
       privateVote: byId('cfg-private').checked,
       useQuestions,
@@ -972,16 +1005,18 @@ window.App = {
   nextRound() {
     if (!state.isHost) return;
     stopTimer();
-    if (state.currentRound >= state.settings.rounds) {
-      const scores = { ...state.scores };
-      emit({ type: 'game_over', scores });
-      state.scores = scores;
-      _showFinal();
-      return;
-    }
     const round = _buildRound(state.currentRound + 1);
     emit({ type: 'next_round', round });
     _startRound(round);
+  },
+
+  endGameForEveryone() {
+    if (!state.isHost) return;
+    stopTimer();
+    clearRevealAnimationTimers();
+    emit({ type: 'room_closed', reason: 'El administrador ha terminado la partida.' });
+    persistGameState({ status: 'closed' });
+    closeRoomLocally('Has terminado la partida. Sala cerrada.');
   },
 
   async newGame() {
@@ -1022,6 +1057,32 @@ window.App = {
     showHome({ replace: true });
   },
 };
+
+function closeRoomLocally(message = 'La sala ha terminado.') {
+  stopTimer();
+  clearRevealAnimationTimers();
+  closeSocket(true);
+  clearActiveSession();
+  sessionStorage.removeItem('pending_room');
+  const overlay = document.createElement('div');
+  overlay.className = 'room-ended-flash';
+  overlay.innerHTML = `<div class="glass rounded-[2rem] p-7 border border-red-400/20 shadow-2xl"><div class="text-5xl mb-3">🏁</div><h2 class="text-3xl font-black text-gradient mb-2">Fin del juego</h2><p class="text-zinc-400 text-sm">${escapeHTML(message)}</p></div>`;
+  document.body.appendChild(overlay);
+  state.room = null;
+  state.isHost = false;
+  state.hostId = null;
+  state.players = [];
+  state.votes = {};
+  state.currentRound = 0;
+  state.currentQuestion = null;
+  state.currentInventorId = null;
+  state.hasVoted = false;
+  setTimeout(() => {
+    overlay.remove();
+    showHome({ replace: true });
+    toast(message, '🏁');
+  }, 1300);
+}
 
 function animateVoteCard(card) {
   card.classList.remove('vote-pop');
@@ -1200,15 +1261,16 @@ function _startRound({ roundNum, question, inventorId }) {
   state.hasVoted = false;
   state.timerExpired = false;
   byId('game-round').textContent = roundNum;
-  byId('game-rounds').textContent = state.settings.rounds;
+  byId('game-rounds').textContent = '∞';
   byId('voted-feedback').classList.add('hidden');
   byId('voted-feedback').textContent = '✓ Voto registrado';
-  byId('round-progress').style.width = `${((roundNum - 1) / state.settings.rounds) * 100}%`;
+  byId('round-progress').style.width = `${Math.min(100, ((roundNum - 1) % 10) * 10)}%`;
   persistGameState({ status: 'playing' });
   renderQuestionArea();
   renderScoresHeader();
   renderVoteGrid();
   renderVoteStatus();
+  byId('admin-game-force-end')?.classList.toggle('hidden', !state.isHost);
   showScreen('game');
   maybeStartRoundTimer();
 }
@@ -1317,14 +1379,14 @@ function _showReveal(roundNum, question) {
   const winnerVoters = winner ? (voteCounts[winner.id] || []) : [];
   const winnerName = winner ? playerLabel(winner) : '—';
   const hasVotes = winnerVoters.length > 0;
-  const isLast = state.currentRound >= state.settings.rounds;
   const resultsEl = byId('reveal-results');
   const adminNext = byId('admin-next');
   const guestWait = byId('guest-next-wait');
 
   adminNext?.classList.add('hidden');
   guestWait?.classList.add('hidden');
-  if (state.isHost) byId('next-round-btn').textContent = isLast ? '🏁 Ver resultados finales' : 'Siguiente ronda →';
+  if (state.isHost) byId('next-round-btn').textContent = 'Siguiente pregunta →';
+  byId('admin-force-end')?.classList.toggle('hidden', !state.isHost);
 
   resultsEl.innerHTML = `<div class="epic-reveal-stage glass rounded-[2rem] p-5 sm:p-7 text-center border border-brand/20 shadow-2xl shadow-brand/10"><div class="epic-reveal-content space-y-5"><p class="text-xs sm:text-sm text-zinc-500 font-black uppercase tracking-[0.32em]">Veredicto de la ronda</p><div id="epic-reveal-line" class="min-h-[9.5rem] flex flex-col items-center justify-center gap-4"><p class="text-2xl sm:text-3xl font-black text-zinc-100 uppercase leading-tight">EL MÁS VOTADO ES</p><div class="epic-dots flex gap-2 text-brand-light text-4xl font-black" aria-label="Pausa dramática"><span>•</span><span>•</span><span>•</span></div></div><div id="epic-winner-voters" class="hidden"></div></div></div><div id="epic-other-results" class="space-y-3 mt-4"></div>`;
 
