@@ -6,9 +6,6 @@ class GameAPI {
     this.baseURL = baseURL.replace(/\/$/, '');
   }
 
-  /**
-   * Helper privado para peticiones HTTP
-   */
   async _request(endpoint, method = 'GET', data = null) {
     const options = {
       method,
@@ -18,9 +15,7 @@ class GameAPI {
       }
     };
 
-    if (data !== null && data !== undefined) {
-      options.body = JSON.stringify(data);
-    }
+    if (data !== null && data !== undefined) options.body = JSON.stringify(data);
 
     try {
       const response = await fetch(`${this.baseURL}/${endpoint}`, options);
@@ -33,10 +28,7 @@ class GameAPI {
         result = { error: text || `Respuesta no JSON (${response.status})` };
       }
 
-      if (!response.ok) {
-        throw new Error(result.error || `Error: ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(result.error || `Error: ${response.status}`);
       return result;
     } catch (error) {
       console.error(`API Error (${method} ${endpoint}):`, error);
@@ -44,16 +36,10 @@ class GameAPI {
     }
   }
 
-  // --- MÉTODOS DE USUARIO ---
-
-  /** Crea un nuevo usuario y devuelve su UUID */
   async createUser(username, password, email = '') {
     return this._request('users', 'POST', { username, password, email });
   }
 
-  // --- MÉTODOS DE JUEGO (ADMIN/CONFIG) ---
-
-  /** Registra un nuevo tipo de juego en la base de datos */
   async createGame(name, maxPlayers, defaultConfig = {}) {
     return this._request('games', 'POST', {
       name,
@@ -62,9 +48,6 @@ class GameAPI {
     });
   }
 
-  // --- MÉTODOS DE SALA (ROOMS) ---
-
-  /** Crea una sala nueva. El host se une automáticamente. */
   async createRoom(gameId, hostId, roomSettings = {}, initialState = { status: 'waiting' }) {
     return this._request('rooms', 'POST', {
       game_id: gameId,
@@ -74,36 +57,29 @@ class GameAPI {
     });
   }
 
-  /** Obtiene la información completa de una sala mediante su código (ej: A6K9P2) */
   async getRoom(roomCode) {
     return this._request(`rooms/${roomCode}`, 'GET');
   }
 
-  /** Une a un usuario a una sala existente */
   async joinRoom(roomCode, userId) {
     return this._request(`rooms/${roomCode}/join`, 'POST', { user_id: userId });
   }
 
-  /** Actualiza el estado del juego, status o settings de la sala */
-  async updateRoomState(roomCode, { gameState, status, roomSettings } = {}) {
+  async updateRoomState(roomCode, { gameState, status, roomSettings }) {
     const payload = {};
     if (gameState !== undefined) payload.game_state = gameState;
     if (status !== undefined) payload.status = status;
     if (roomSettings !== undefined) payload.room_settings = roomSettings;
-
     return this._request(`rooms/${roomCode}/state`, 'PATCH', payload);
   }
 
-  // --- MÉTODOS DE PUNTUACIÓN (SCORES) ---
-
-  /** Guarda una puntuación al finalizar una partida */
   async saveScore(userId, gameId, scoreValue, roomId = null, metadata = {}) {
     return this._request('scores', 'POST', {
       user_id: userId,
       game_id: gameId,
       room_id: roomId,
       score_value: scoreValue,
-      metadata: metadata
+      metadata
     });
   }
 }
