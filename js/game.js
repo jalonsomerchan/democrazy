@@ -1,7 +1,7 @@
-import { connect } from 'https://esm.sh/itty-sockets';
-
 const api = new GameAPI();
 const GAME_ID = 12;
+const SOCKET_RECONNECT_MS = 1800;
+const SOCKET_MAX_RETRIES = 6;
 
 // ─── State ────────────────────────────────────────────────────────────────────
 const state = {
@@ -12,13 +12,21 @@ const state = {
   settings: { rounds: 5, points: true, privateVote: false, useQuestions: true, questionVisible: true },
   currentRound: 0,
   currentQuestion: null,
+  currentInventorId: null,
   votes: {},
   scores: {},
   hasVoted: false,
   socket: null,
+  socketReady: false,
+  socketRoomCode: null,
+  socketReconnectAttempts: 0,
+  socketReconnectTimer: null,
+  socketManualClose: false,
+  fallbackChannel: null,
+  pendingMessages: [],
 };
 
-const sid = () => state.user?.username ?? '';
+const sid = () => String(state.user?.id ?? '');
 
 // ─── Routing ──────────────────────────────────────────────────────────────────
 const SCREEN_ROUTES = {
@@ -43,7 +51,6 @@ window.addEventListener('popstate', e => {
   const screen = e.state?.screen;
   if (!screen || !document.getElementById(`screen-${screen}`)) return;
 
-  // Guard invalid back-navigations
   if (screen === 'lobby' && !state.user) {
     showScreen('login', true); return;
   }
@@ -55,11 +62,38 @@ window.addEventListener('popstate', e => {
   document.getElementById(`screen-${screen}`).classList.add('active');
 });
 
+// ─── Safe rendering helpers ───────────────────────────────────────────────────
+function escapeHTML(value = '') {
+  return String(value).replace(/[&<>'"]/g, char => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '\'': '&#39;',
+    '"': '&quot;',
+  }[char]));
+}
+
+function initials(username = '?') {
+  return escapeHTML(String(username || '?').trim()[0]?.toUpperCase() || '?');
+}
+
+function byId(id) {
+  return document.getElementById(id);
+}
+
 // ─── Toast ────────────────────────────────────────────────────────────────────
 let _toastTimer;
 function toast(msg, icon = '') {
-  const el = document.getElementById('toast');
-  el.innerHTML = icon ? `<span>${icon}</span><span>${msg}</span>` : msg;
+  const el = byId('toast');
+  el.replaceChildren();
+  if (icon) {
+    const iconEl = document.createElement('span');
+    iconEl.textContent = icon;
+    el.appendChild(iconEl);
+  }
+  const textEl = document.createElement('span');
+  textEl.textContent = msg;
+  el.appendChild(textEl);
   el.style.opacity = '1';
   clearTimeout(_toastTimer);
   _toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 2800);
@@ -71,7 +105,7 @@ function renderQR(url) {
   img.src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(url)}`;
   img.className = 'rounded-lg';
   img.width = img.height = 180;
-  const c = document.getElementById('qr-container');
+  const c = byId('qr-container');
   c.innerHTML = '';
   c.appendChild(img);
 }
@@ -79,7 +113,7 @@ function renderQR(url) {
 // ─── Confetti ─────────────────────────────────────────────────────────────────
 function launchConfetti() {
   const colors = ['#7C3AED','#A78BFA','#F59E0B','#34D399','#F87171','#60A5FA','#FB923C'];
-  const container = document.getElementById('confetti-container');
+  const container = byId('confetti-container');
   container.innerHTML = '';
   for (let i = 0; i < 90; i++) {
     const p = document.createElement('div');
@@ -99,7 +133,7 @@ function launchConfetti() {
   setTimeout(() => { container.innerHTML = ''; }, 6000);
 }
 
-// ─── Player avatar color ──────────────────────────────────────────────────────
+// ─── Player helpers ───────────────────────────────────────────────────────────
 function avatarGradient(username) {
   const palettes = [
     'from-violet-500 to-purple-700',
@@ -114,53 +148,179 @@ function avatarGradient(username) {
   return palettes[hash % palettes.length];
 }
 
-// ─── Normalize player ─────────────────────────────────────────────────────────
-function normPlayer(p) {
-  const username = p.username ?? p.name ?? '?';
-  return { id: username, username };
+function normPlayer(p = {}) {
+  const username = String(p.username ?? p.name ?? p.display_name ?? p.user_name ?? '?');
+  const id = String(p.id ?? p.user_id ?? p.userId ?? p.uuid ?? username);
+  return { id, username };
 }
 
-// ─── WebSocket ────────────────────────────────────────────────────────────────
-function connectSocket(roomCode) {
-  state.socket?.close?.();
-  state.socket = connect(`democrazy-${roomCode}`);
-  state.socket.on('message', ({ message }) => {
-    try {
-      const data = typeof message === 'string' ? JSON.parse(message) : message;
-      handleSocketMessage(data);
-    } catch(e) { console.warn('socket parse error', e); }
-  });
+function currentPlayer() {
+  return state.user ? { id: sid(), username: state.user.username } : null;
+}
+
+function upsertPlayer(player) {
+  const p = normPlayer(player);
+  const existing = state.players.findIndex(x => x.id === p.id);
+  if (existing >= 0) state.players[existing] = { ...state.players[existing], ...p };
+  else state.players.push(p);
+  return p;
+}
+
+// ─── WebSocket with fallback/reconnect ────────────────────────────────────────
+let socketConnectorPromise = null;
+async function loadSocketConnector() {
+  if (!socketConnectorPromise) {
+    socketConnectorPromise = import('https://esm.sh/itty-sockets')
+      .then(mod => mod.connect)
+      .catch(error => {
+        console.warn('No se pudo cargar itty-sockets. Se usará fallback local.', error);
+        return null;
+      });
+  }
+  return socketConnectorPromise;
+}
+
+function closeSocket(manual = true) {
+  state.socketManualClose = manual;
+  clearTimeout(state.socketReconnectTimer);
+  state.socketReconnectTimer = null;
+  state.socketReady = false;
+  try { state.socket?.close?.(); } catch {}
+  state.socket = null;
+  try { state.fallbackChannel?.close?.(); } catch {}
+  state.fallbackChannel = null;
+}
+
+function setupFallbackChannel(roomCode) {
+  if (!('BroadcastChannel' in window)) return false;
+  try {
+    state.fallbackChannel?.close?.();
+    const channel = new BroadcastChannel(`democrazy-${roomCode}`);
+    channel.onmessage = event => handleSocketMessage(event.data);
+    state.fallbackChannel = channel;
+    state.socketReady = true;
+    flushPendingMessages();
+    return true;
+  } catch (error) {
+    console.warn('Fallback BroadcastChannel no disponible', error);
+    return false;
+  }
+}
+
+async function connectSocket(roomCode, { reconnect = false } = {}) {
+  if (!roomCode) return false;
+  if (!reconnect) {
+    closeSocket(false);
+    state.socketReconnectAttempts = 0;
+  }
+
+  state.socketRoomCode = roomCode;
+  state.socketManualClose = false;
+
+  const connect = await loadSocketConnector();
+  if (!connect) {
+    const fallbackReady = setupFallbackChannel(roomCode);
+    if (fallbackReady) toast('Conexión local de respaldo activada', '📡');
+    else toast('No se pudo abrir la conexión en tiempo real', '⚠️');
+    return fallbackReady;
+  }
+
+  try {
+    state.socket = connect(`democrazy-${roomCode}`);
+    state.socketReady = true;
+    state.socketReconnectAttempts = 0;
+
+    state.socket.on?.('message', ({ message }) => {
+      try {
+        const data = typeof message === 'string' ? JSON.parse(message) : message;
+        handleSocketMessage(data);
+      } catch(e) { console.warn('socket parse error', e); }
+    });
+
+    const scheduleReconnect = () => {
+      state.socketReady = false;
+      if (state.socketManualClose || !state.socketRoomCode) return;
+      if (state.socketReconnectAttempts >= SOCKET_MAX_RETRIES) {
+        if (setupFallbackChannel(state.socketRoomCode)) {
+          toast('Conexión de respaldo activada', '📡');
+        } else {
+          toast('Conexión perdida. Revisa tu red.', '⚠️');
+        }
+        return;
+      }
+      state.socketReconnectAttempts += 1;
+      clearTimeout(state.socketReconnectTimer);
+      state.socketReconnectTimer = setTimeout(() => {
+        connectSocket(state.socketRoomCode, { reconnect: true });
+      }, SOCKET_RECONNECT_MS * state.socketReconnectAttempts);
+    };
+
+    state.socket.on?.('close', scheduleReconnect);
+    state.socket.on?.('error', scheduleReconnect);
+    flushPendingMessages();
+    return true;
+  } catch (error) {
+    console.warn('socket connect error', error);
+    state.socketReady = false;
+    if (setupFallbackChannel(roomCode)) return true;
+    return false;
+  }
+}
+
+function flushPendingMessages() {
+  const queued = state.pendingMessages.splice(0);
+  queued.forEach(data => emit(data));
 }
 
 function emit(data) {
-  state.socket?.send?.(JSON.stringify(data));
+  if (!data) return;
+  const payload = JSON.stringify(data);
+  if (state.socketReady && state.socket?.send) {
+    state.socket.send(payload);
+    return;
+  }
+  if (state.socketReady && state.fallbackChannel) {
+    state.fallbackChannel.postMessage(data);
+    handleSocketMessage(data);
+    return;
+  }
+  state.pendingMessages.push(data);
 }
 
 // ─── Socket handler ───────────────────────────────────────────────────────────
 function handleSocketMessage(data) {
   switch (data.type) {
     case 'player_joined': {
-      const p = normPlayer(data.player);
-      if (!state.players.find(x => x.id === p.id)) state.players.push(p);
+      const p = upsertPlayer(data.player);
+      if (state.scores[p.id] == null) state.scores[p.id] = 0;
       renderWaitingPlayers();
       if (state.isHost) emit({ type: 'room_update', players: state.players });
       break;
     }
     case 'room_update':
-      state.players = data.players.map(normPlayer);
+      state.players = (data.players ?? []).map(normPlayer);
       renderWaitingPlayers();
       break;
     case 'player_left':
       state.players = state.players.filter(p => p.id !== String(data.playerId));
+      delete state.votes[String(data.playerId)];
       renderWaitingPlayers();
+      renderVoteStatus();
       break;
     case 'game_started':
       state.settings = data.settings;
-      state.players = data.players.map(normPlayer);
+      state.players = (data.players ?? []).map(normPlayer);
       state.currentRound = 0;
       state.scores = {};
       state.players.forEach(p => { state.scores[p.id] = 0; });
       _startRound(data.firstRound);
+      break;
+    case 'question_set':
+      state.currentQuestion = String(data.question || '');
+      state.currentInventorId = data.inventorId ? String(data.inventorId) : state.currentInventorId;
+      renderQuestionArea();
+      renderVoteGrid();
+      renderVoteStatus();
       break;
     case 'vote_cast': {
       state.votes[String(data.voterId)] = String(data.votedId);
@@ -169,19 +329,19 @@ function handleSocketMessage(data) {
       break;
     }
     case 'round_reveal':
-      state.votes = data.votes;
-      state.scores = data.scores;
+      state.votes = data.votes ?? {};
+      state.scores = data.scores ?? {};
       _showReveal(data.round, data.question);
       break;
     case 'next_round':
       _startRound(data.round);
       break;
     case 'game_over':
-      state.scores = data.scores;
+      state.scores = data.scores ?? {};
       _showFinal();
       break;
     case 'new_game':
-      state.players = data.players.map(normPlayer);
+      state.players = (data.players ?? []).map(normPlayer);
       state.currentRound = 0;
       state.votes = {};
       state.scores = {};
@@ -195,47 +355,46 @@ function handleSocketMessage(data) {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 window.App = {
-
   init() {
-    // Restore user from localStorage
     const saved = localStorage.getItem('democrazy_user');
     if (saved) {
-      const u = JSON.parse(saved);
-      u.id = String(u.id);
-      state.user = u;
-      document.getElementById('existing-avatar').textContent = u.username[0].toUpperCase();
-      document.getElementById('existing-name').textContent = u.username;
-      document.getElementById('existing-user-card').classList.remove('hidden');
-      document.getElementById('new-user-toggle').classList.remove('hidden');
-      document.getElementById('new-user-form').classList.add('hidden');
+      try {
+        const u = JSON.parse(saved);
+        u.id = String(u.id);
+        state.user = u;
+        byId('existing-avatar').textContent = u.username[0].toUpperCase();
+        byId('existing-name').textContent = u.username;
+        byId('existing-user-card').classList.remove('hidden');
+        byId('new-user-toggle').classList.remove('hidden');
+        byId('new-user-form').classList.add('hidden');
+      } catch {
+        localStorage.removeItem('democrazy_user');
+      }
     }
 
-    // Handle ?sala=CODE invite link
     const code = new URLSearchParams(location.search).get('sala');
     if (code) sessionStorage.setItem('pending_room', code.toUpperCase());
-
-    // Set initial history state
     history.replaceState({ screen: 'login' }, '', '#/');
   },
 
   useExistingUser() { App._enterLobby(); },
 
   showNewUserForm() {
-    document.getElementById('new-user-form').classList.remove('hidden');
-    document.getElementById('new-user-toggle').classList.add('hidden');
-    document.getElementById('existing-user-card').classList.add('hidden');
-    document.getElementById('input-username').focus();
+    byId('new-user-form').classList.remove('hidden');
+    byId('new-user-toggle').classList.add('hidden');
+    byId('existing-user-card').classList.add('hidden');
+    byId('input-username').focus();
   },
 
   async createUser() {
-    const username = document.getElementById('input-username').value.trim();
-    const errEl = document.getElementById('login-error');
+    const username = byId('input-username').value.trim();
+    const errEl = byId('login-error');
     errEl.classList.add('hidden');
     if (!username || username.length < 2) {
       errEl.textContent = 'El nombre debe tener al menos 2 caracteres.';
       errEl.classList.remove('hidden');
-      document.getElementById('input-username').classList.add('shake');
-      setTimeout(() => document.getElementById('input-username').classList.remove('shake'), 400);
+      byId('input-username').classList.add('shake');
+      setTimeout(() => byId('input-username').classList.remove('shake'), 400);
       return;
     }
     try {
@@ -253,37 +412,37 @@ window.App = {
   switchUser() {
     localStorage.removeItem('democrazy_user');
     state.user = null;
-    document.getElementById('existing-user-card').classList.add('hidden');
-    document.getElementById('new-user-toggle').classList.add('hidden');
-    document.getElementById('new-user-form').classList.remove('hidden');
+    byId('existing-user-card').classList.add('hidden');
+    byId('new-user-toggle').classList.add('hidden');
+    byId('new-user-form').classList.remove('hidden');
     showScreen('login');
   },
 
   _enterLobby() {
-    document.getElementById('lobby-username').textContent = state.user.username;
+    byId('lobby-username').textContent = state.user.username;
     showScreen('lobby');
     const pending = sessionStorage.getItem('pending_room');
     if (pending) {
       sessionStorage.removeItem('pending_room');
-      document.getElementById('input-room-code').value = pending;
+      byId('input-room-code').value = pending;
       App.joinRoom();
     }
   },
 
   async createRoom() {
-    const btn = document.getElementById('screen-lobby').querySelector('.btn-brand');
+    const btn = byId('screen-lobby').querySelector('.btn-brand');
     btn.textContent = 'Creando...'; btn.disabled = true;
     try {
       const settings = { rounds: 5, points: true, privateVote: false, useQuestions: true, questionVisible: true };
-      const res = await api.createRoom(GAME_ID, state.user.id, settings, { status: 'waiting' });
+      const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting' });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.isHost = true;
-      state.players = [{ id: state.user.username, username: state.user.username }];
+      state.players = [currentPlayer()];
       state.settings = settings;
-      connectSocket(state.room.code);
+      await connectSocket(state.room.code);
       App._enterWaiting();
     } catch (e) {
-      toast('Error al crear sala: ' + e.message, '⚠️');
+      toast('Error al crear sala: ' + (e.message || 'desconocido'), '⚠️');
       console.error(e);
     } finally {
       btn.innerHTML = '<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg> Crear sala';
@@ -292,23 +451,21 @@ window.App = {
   },
 
   async joinRoom() {
-    const code = document.getElementById('input-room-code').value.trim().toUpperCase();
-    const errEl = document.getElementById('join-error');
+    const code = byId('input-room-code').value.trim().toUpperCase();
+    const errEl = byId('join-error');
     errEl.classList.add('hidden');
     if (code.length < 4) return;
     try {
-      await api.joinRoom(code, state.user.id);
+      await api.joinRoom(code, sid());
       state.isHost = false;
       const roomData = await api.getRoom(code);
-      state.room = { code, id: roomData.id };
+      state.room = { code, id: String(roomData.id ?? roomData.room_id ?? '') };
       const rawPlayers = roomData.players ?? roomData.users ?? roomData.members ?? [];
       state.players = rawPlayers.map(normPlayer);
-      if (!state.players.find(p => p.id === sid())) {
-        state.players.push({ id: state.user.username, username: state.user.username });
-      }
+      upsertPlayer(currentPlayer());
       state.settings = roomData.room_settings ?? roomData.settings ?? state.settings;
-      connectSocket(code);
-      emit({ type: 'player_joined', player: { id: state.user.username, username: state.user.username } });
+      await connectSocket(code);
+      emit({ type: 'player_joined', player: currentPlayer() });
       App._enterWaiting();
     } catch (e) {
       errEl.textContent = e.message || 'Sala no encontrada.';
@@ -318,19 +475,19 @@ window.App = {
   },
 
   _enterWaiting() {
-    document.getElementById('waiting-code').textContent = state.room.code;
-    document.getElementById('qr-code-label').textContent = state.room.code;
-    document.getElementById('admin-settings').classList.toggle('hidden', !state.isHost);
-    document.getElementById('admin-start').classList.toggle('hidden', !state.isHost);
-    document.getElementById('guest-wait').classList.toggle('hidden', state.isHost);
+    byId('waiting-code').textContent = state.room.code;
+    byId('qr-code-label').textContent = state.room.code;
+    byId('admin-settings').classList.toggle('hidden', !state.isHost);
+    byId('admin-start').classList.toggle('hidden', !state.isHost);
+    byId('guest-wait').classList.toggle('hidden', state.isHost);
     if (state.isHost) {
       const s = state.settings;
-      document.getElementById('cfg-rounds').value = s.rounds;
-      document.getElementById('cfg-rounds-display').textContent = s.rounds;
-      document.getElementById('cfg-points').checked = s.points;
-      document.getElementById('cfg-private').checked = s.privateVote;
-      document.getElementById('cfg-questions').checked = s.useQuestions;
-      document.getElementById('cfg-visible').checked = s.questionVisible ?? true;
+      byId('cfg-rounds').value = s.rounds;
+      byId('cfg-rounds-display').textContent = s.rounds;
+      byId('cfg-points').checked = s.points;
+      byId('cfg-private').checked = s.privateVote;
+      byId('cfg-questions').checked = s.useQuestions;
+      byId('cfg-visible').checked = s.questionVisible ?? true;
       App.updateVisibleHint();
     }
     renderWaitingPlayers();
@@ -340,7 +497,7 @@ window.App = {
     history.replaceState({ screen: 'waiting' }, '', `#/sala/${state.room.code}`);
   },
 
-  toggleQR() { document.getElementById('qr-panel').classList.toggle('hidden'); },
+  toggleQR() { byId('qr-panel').classList.toggle('hidden'); },
 
   async shareRoom() {
     const url = `${location.origin}${location.pathname}?sala=${state.room.code}`;
@@ -354,8 +511,8 @@ window.App = {
   },
 
   adjRounds(delta) {
-    const input = document.getElementById('cfg-rounds');
-    const display = document.getElementById('cfg-rounds-display');
+    const input = byId('cfg-rounds');
+    const display = byId('cfg-rounds-display');
     const val = Math.min(20, Math.max(1, (parseInt(input.value) || 5) + delta));
     input.value = val;
     display.textContent = val;
@@ -364,19 +521,19 @@ window.App = {
   },
 
   updateVisibleHint() {
-    const checked = document.getElementById('cfg-visible').checked;
-    document.getElementById('cfg-visible-hint').textContent = checked
+    const checked = byId('cfg-visible').checked;
+    byId('cfg-visible-hint').textContent = checked
       ? 'Todos ven la pregunta'
       : 'Solo el admin ve la pregunta';
   },
 
   async startGame() {
     const settings = {
-      rounds:          parseInt(document.getElementById('cfg-rounds').value) || 5,
-      points:          document.getElementById('cfg-points').checked,
-      privateVote:     document.getElementById('cfg-private').checked,
-      useQuestions:    document.getElementById('cfg-questions').checked,
-      questionVisible: document.getElementById('cfg-visible').checked,
+      rounds:          parseInt(byId('cfg-rounds').value) || 5,
+      points:          byId('cfg-points').checked,
+      privateVote:     byId('cfg-private').checked,
+      useQuestions:    byId('cfg-questions').checked,
+      questionVisible: byId('cfg-visible').checked,
     };
     state.settings = settings;
     await api.updateRoomState(state.room.code, { status: 'playing', roomSettings: settings });
@@ -387,8 +544,27 @@ window.App = {
     _startRound(firstRound);
   },
 
+  setCustomQuestion() {
+    const input = byId('manual-question-input');
+    const err = byId('manual-question-error');
+    if (!input) return;
+    const question = input.value.trim();
+    if (question.length < 3) {
+      if (err) {
+        err.textContent = 'Escribe una pregunta un poco más larga.';
+        err.classList.remove('hidden');
+      }
+      return;
+    }
+    state.currentQuestion = question;
+    emit({ type: 'question_set', round: state.currentRound, question, inventorId: state.currentInventorId });
+    renderQuestionArea();
+    renderVoteGrid();
+    renderVoteStatus();
+  },
+
   castVote(votedId) {
-    if (state.hasVoted) return;
+    if (state.hasVoted || !state.currentQuestion) return;
     state.hasVoted = true;
     const tid = String(votedId);
     state.votes[sid()] = tid;
@@ -397,7 +573,7 @@ window.App = {
       c.classList.toggle('selected', c.dataset.id === tid);
       c.classList.add('voted');
     });
-    document.getElementById('voted-feedback').classList.remove('hidden');
+    byId('voted-feedback').classList.remove('hidden');
     renderVoteStatus();
     emit({ type: 'vote_cast', voterId: sid(), votedId: tid });
     if (state.isHost && Object.keys(state.votes).length >= state.players.length) _doReveal();
@@ -418,25 +594,26 @@ window.App = {
 
   async newGame() {
     try {
-      const res = await api.createRoom(GAME_ID, state.user.id, state.settings, { status: 'waiting' });
+      const res = await api.createRoom(GAME_ID, sid(), state.settings, { status: 'waiting' });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.isHost = true;
       state.votes = {};
       state.currentRound = 0;
+      state.currentQuestion = null;
+      state.currentInventorId = null;
       state.hasVoted = false;
-      connectSocket(state.room.code);
+      await connectSocket(state.room.code);
       emit({ type: 'new_game', players: state.players });
       App._enterWaiting();
-    } catch(e) { toast('Error: ' + e.message, '⚠️'); }
+    } catch(e) { toast('Error: ' + (e.message || 'desconocido'), '⚠️'); }
   },
 
   exitToLobby() {
-    state.socket?.close?.();
-    state.socket = null;
+    closeSocket(true);
     state.room = null;
     state.isHost = false;
     state.players = [];
-    document.getElementById('lobby-username').textContent = state.user.username;
+    byId('lobby-username').textContent = state.user.username;
     showScreen('lobby');
   },
 };
@@ -470,84 +647,131 @@ function _doReveal() {
 
 // ─── Render ───────────────────────────────────────────────────────────────────
 function renderWaitingPlayers() {
-  const c = document.getElementById('waiting-players');
-  document.getElementById('waiting-count').textContent = state.players.length;
-  c.innerHTML = state.players.map((p, i) => `
-    <div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop" style="animation-delay:${i * .05}s">
-      <div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">
-        ${p.username[0].toUpperCase()}
+  const c = byId('waiting-players');
+  byId('waiting-count').textContent = state.players.length;
+  c.innerHTML = state.players.map((p, i) => {
+    const username = escapeHTML(p.username);
+    return `
+      <div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop" style="animation-delay:${i * .05}s">
+        <div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">
+          ${initials(p.username)}
+        </div>
+        <span class="flex-1 font-semibold truncate">${username}</span>
+        ${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}
+        ${i === 0 ? '<span class="text-xs bg-brand/20 text-brand-light px-2.5 py-0.5 rounded-full font-bold">Host</span>' : ''}
       </div>
-      <span class="flex-1 font-semibold truncate">${p.username}</span>
-      ${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}
-      ${i === 0 ? '<span class="text-xs bg-brand/20 text-brand-light px-2.5 py-0.5 rounded-full font-bold">Host</span>' : ''}
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 function _startRound({ roundNum, question, inventorId }) {
   state.currentRound = roundNum;
-  state.currentQuestion = question;
+  state.currentQuestion = question ? String(question) : null;
+  state.currentInventorId = inventorId ? String(inventorId) : null;
   state.votes = {};
   state.hasVoted = false;
 
-  document.getElementById('game-round').textContent = roundNum;
-  document.getElementById('game-rounds').textContent = state.settings.rounds;
-  document.getElementById('voted-feedback').classList.add('hidden');
+  byId('game-round').textContent = roundNum;
+  byId('game-rounds').textContent = state.settings.rounds;
+  byId('voted-feedback').classList.add('hidden');
 
-  // Round progress bar
   const pct = ((roundNum - 1) / state.settings.rounds) * 100;
-  document.getElementById('round-progress').style.width = pct + '%';
+  byId('round-progress').style.width = pct + '%';
 
-  const inventorEl = document.getElementById('question-inventor');
-  const qEl = document.getElementById('game-question');
-  const canSeeQuestion = state.settings.questionVisible || state.isHost;
-
-  if (question) {
-    inventorEl.classList.add('hidden');
-    qEl.classList.remove('hidden');
-    qEl.textContent = canSeeQuestion ? question : '🔒 El admin conoce la pregunta';
-  } else {
-    const inventor = state.players.find(p => p.id === String(inventorId));
-    qEl.textContent = '';
-    inventorEl.classList.remove('hidden');
-    document.getElementById('inventor-name').textContent = inventor?.username ?? '?';
-  }
-
-  if (state.settings.points) {
-    document.getElementById('game-scores-header').innerHTML = state.players.map(p => `
-      <div class="flex flex-col items-center min-w-0 px-1">
-        <span class="text-[10px] text-zinc-500 truncate max-w-[3.5rem]">${p.username.slice(0, 6)}</span>
-        <span class="font-black text-brand-light text-sm leading-tight">${state.scores[p.id] || 0}</span>
-      </div>
-    `).join('');
-  }
-
-  const votable = state.players.filter(p => p.id !== sid());
-  document.getElementById('vote-grid').innerHTML = votable.length
-    ? votable.map((p, i) => `
-        <button class="vote-card rounded-2xl p-5 flex flex-col items-center gap-3 pop" data-id="${p.id}"
-          onclick="App.castVote('${p.id}')" style="animation-delay:${i * .06}s">
-          <div class="w-14 h-14 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-2xl shadow-lg">
-            ${p.username[0].toUpperCase()}
-          </div>
-          <span class="font-bold text-sm text-zinc-200">${p.username}</span>
-        </button>
-      `).join('')
-    : '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Necesitas más jugadores para votar</p>';
-
+  renderQuestionArea();
+  renderScoresHeader();
+  renderVoteGrid();
   renderVoteStatus();
   showScreen('game');
 }
 
+function renderQuestionArea() {
+  const inventorEl = byId('question-inventor');
+  const qEl = byId('game-question');
+  const canSeeQuestion = state.settings.questionVisible || state.isHost;
+
+  if (state.currentQuestion) {
+    inventorEl.classList.add('hidden');
+    qEl.classList.remove('hidden');
+    qEl.textContent = canSeeQuestion ? state.currentQuestion : '🔒 El admin conoce la pregunta';
+    return;
+  }
+
+  const inventor = state.players.find(p => p.id === String(state.currentInventorId));
+  inventorEl.classList.remove('hidden');
+  byId('inventor-name').textContent = inventor?.username ?? '?';
+  qEl.classList.remove('hidden');
+
+  const canCreate = sid() === String(state.currentInventorId) || state.isHost;
+  if (canCreate) {
+    qEl.innerHTML = `
+      <span class="block text-sm text-zinc-400 font-medium mb-3">Escribe la pregunta de esta ronda para que todos puedan votar.</span>
+      <span class="block glass rounded-2xl p-3">
+        <input id="manual-question-input" type="text" maxlength="140" placeholder="Ej: ¿Quién sobreviviría mejor en una isla desierta?"
+          class="w-full bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand/70 placeholder-zinc-600 transition" />
+        <span id="manual-question-error" class="hidden text-red-400 text-xs mt-2 text-left block"></span>
+        <button id="manual-question-button" class="btn-brand mt-3 w-full py-3 rounded-xl font-bold text-sm">Usar esta pregunta</button>
+      </span>
+    `;
+    byId('manual-question-input')?.addEventListener('keydown', event => {
+      if (event.key === 'Enter') App.setCustomQuestion();
+    });
+    byId('manual-question-button')?.addEventListener('click', App.setCustomQuestion);
+    byId('manual-question-input')?.focus();
+  } else {
+    qEl.textContent = `Esperando a que ${inventor?.username ?? 'el jugador elegido'} escriba la pregunta...`;
+  }
+}
+
+function renderScoresHeader() {
+  const header = byId('game-scores-header');
+  if (!state.settings.points) {
+    header.innerHTML = '';
+    return;
+  }
+  header.innerHTML = state.players.map(p => `
+    <div class="flex flex-col items-center min-w-0 px-1">
+      <span class="text-[10px] text-zinc-500 truncate max-w-[3.5rem]">${escapeHTML(p.username.slice(0, 6))}</span>
+      <span class="font-black text-brand-light text-sm leading-tight">${state.scores[p.id] || 0}</span>
+    </div>
+  `).join('');
+}
+
+function renderVoteGrid() {
+  const grid = byId('vote-grid');
+  if (!state.currentQuestion) {
+    grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">La votación se activará cuando haya una pregunta.</p>';
+    return;
+  }
+
+  const votable = state.players.filter(p => p.id !== sid());
+  grid.innerHTML = votable.length
+    ? votable.map((p, i) => `
+        <button class="vote-card rounded-2xl p-5 flex flex-col items-center gap-3 pop" data-id="${escapeHTML(p.id)}" style="animation-delay:${i * .06}s">
+          <div class="w-14 h-14 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-2xl shadow-lg">
+            ${initials(p.username)}
+          </div>
+          <span class="font-bold text-sm text-zinc-200">${escapeHTML(p.username)}</span>
+        </button>
+      `).join('')
+    : '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Necesitas más jugadores para votar</p>';
+
+  grid.querySelectorAll('.vote-card').forEach(button => {
+    button.addEventListener('click', () => App.castVote(button.dataset.id));
+  });
+}
+
 function renderVoteStatus() {
   const voted = Object.keys(state.votes).length;
-  const total = state.players.length;
-  document.getElementById('votes-status').textContent = `${voted} de ${total} han votado`;
+  const total = state.currentQuestion ? state.players.length : 0;
+  byId('votes-status').textContent = state.currentQuestion
+    ? `${voted} de ${total} han votado`
+    : 'Esperando pregunta para iniciar la votación';
 }
 
 function _showReveal(roundNum, question) {
-  document.getElementById('reveal-round').textContent = roundNum;
-  const qEl = document.getElementById('reveal-question');
+  byId('reveal-round').textContent = roundNum;
+  const qEl = byId('reveal-question');
   qEl.textContent = question || '';
   qEl.classList.toggle('hidden', !question);
 
@@ -564,7 +788,7 @@ function _showReveal(roundNum, question) {
   const maxVotes = Math.max(...sorted.map(p => voteCounts[p.id]?.length || 0), 1);
   const isLast = state.currentRound >= state.settings.rounds;
 
-  document.getElementById('reveal-results').innerHTML = sorted.map((p, i) => {
+  byId('reveal-results').innerHTML = sorted.map((p, i) => {
     const voters = voteCounts[p.id] || [];
     const isTop = i === 0 && voters.length > 0;
     const barPct = Math.round((voters.length / maxVotes) * 100);
@@ -573,10 +797,10 @@ function _showReveal(roundNum, question) {
       <div class="glass rounded-2xl p-4 pop" style="animation-delay:${i * .09}s">
         <div class="flex items-center gap-3 mb-2.5">
           <div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black shadow-md flex-shrink-0">
-            ${p.username[0].toUpperCase()}
+            ${initials(p.username)}
           </div>
           <div class="flex-1 min-w-0">
-            <p class="font-bold truncate">${p.username}${isTop ? ' 👑' : ''}</p>
+            <p class="font-bold truncate">${escapeHTML(p.username)}${isTop ? ' 👑' : ''}</p>
             <p class="text-xs text-zinc-500">${voters.length} voto${voters.length !== 1 ? 's' : ''}</p>
           </div>
           ${state.settings.points ? `<span class="font-black text-brand-light text-lg flex-shrink-0">${pts}pts</span>` : ''}
@@ -586,14 +810,14 @@ function _showReveal(roundNum, question) {
         </div>
         ${!state.settings.privateVote && voters.length ? `
           <div class="mt-2 flex flex-wrap gap-1">
-            ${voters.map(v => `<span class="text-xs bg-zinc-800 px-2 py-0.5 rounded-full text-zinc-400">${v}</span>`).join('')}
+            ${voters.map(v => `<span class="text-xs bg-zinc-800 px-2 py-0.5 rounded-full text-zinc-400">${escapeHTML(v)}</span>`).join('')}
           </div>` : ''}
       </div>`;
   }).join('');
 
-  document.getElementById('admin-next').classList.toggle('hidden', !state.isHost);
-  document.getElementById('guest-next-wait').classList.toggle('hidden', state.isHost);
-  if (state.isHost) document.getElementById('next-round-btn').textContent = isLast ? '🏁 Ver resultados finales' : 'Siguiente ronda →';
+  byId('admin-next').classList.toggle('hidden', !state.isHost);
+  byId('guest-next-wait').classList.toggle('hidden', state.isHost);
+  if (state.isHost) byId('next-round-btn').textContent = isLast ? '🏁 Ver resultados finales' : 'Siguiente ronda →';
 
   showScreen('reveal');
 }
@@ -601,19 +825,19 @@ function _showReveal(roundNum, question) {
 function _showFinal() {
   launchConfetti();
   const sorted = [...state.players].sort((a, b) => (state.scores[b.id] || 0) - (state.scores[a.id] || 0));
-  document.getElementById('winner-name').textContent = sorted[0]?.username ?? '—';
-  document.getElementById('final-scores').innerHTML = sorted.map((p, i) => `
+  byId('winner-name').textContent = sorted[0]?.username ?? '—';
+  byId('final-scores').innerHTML = sorted.map((p, i) => `
     <div class="flex items-center gap-3 glass rounded-2xl px-4 py-3.5 pop" style="animation-delay:${i * .08}s">
       <span class="text-2xl flex-shrink-0">${['🥇','🥈','🥉'][i] ?? `${i + 1}.`}</span>
       <div class="w-9 h-9 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-sm shadow-md flex-shrink-0">
-        ${p.username[0].toUpperCase()}
+        ${initials(p.username)}
       </div>
-      <span class="flex-1 font-semibold truncate">${p.username}</span>
+      <span class="flex-1 font-semibold truncate">${escapeHTML(p.username)}</span>
       <span class="font-black text-gradient text-lg">${state.scores[p.id] || 0}pts</span>
     </div>
   `).join('');
-  document.getElementById('admin-new-game').classList.toggle('hidden', !state.isHost);
-  document.getElementById('guest-end-wait').classList.toggle('hidden', state.isHost);
+  byId('admin-new-game').classList.toggle('hidden', !state.isHost);
+  byId('guest-end-wait').classList.toggle('hidden', state.isHost);
   showScreen('final');
 }
 

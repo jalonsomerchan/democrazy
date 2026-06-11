@@ -1,15 +1,13 @@
-const api = new window.GameAPI();
+
+const api = new GameAPI();
 const GAME_ID = 12;
 const SOCKET_RECONNECT_MS = 1800;
 const SOCKET_MAX_RETRIES = 6;
-const API_POLL_MS = 1500;
 const SESSION_KEY = 'democrazy_active_room';
 
 const state = {
   user: null,
   room: null,
-  roomStatus: 'waiting',
-  hostId: null,
   isHost: false,
   players: [],
   settings: {
@@ -32,20 +30,16 @@ const state = {
   socketReconnectAttempts: 0,
   socketReconnectTimer: null,
   socketManualClose: false,
-  pollTimer: null,
+  fallbackChannel: null,
   pendingMessages: [],
-  syncTimer: null,
   timerInterval: null,
-  timerStartedAt: null,
   timerEndsAt: null,
   timerRemaining: 0,
   timerExpired: false,
-  lastEventId: null,
-  appliedEventIds: new Set(),
+  lastRoundToken: '',
 };
 
 const sid = () => String(state.user?.id ?? '');
-const questionBank = () => window.questions ?? [];
 
 const SCREEN_ROUTES = {
   login: '#/',
@@ -58,10 +52,6 @@ const SCREEN_ROUTES = {
 
 function byId(id) {
   return document.getElementById(id);
-}
-
-function activeScreen() {
-  return document.querySelector('.screen.active')?.id?.replace('screen-', '') ?? '';
 }
 
 function escapeHTML(value = '') {
@@ -80,7 +70,7 @@ function initials(username = '?') {
 
 function showScreen(id, replace = false) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  byId(`screen-${id}`)?.classList.add('active');
+  byId(`screen-${id}`).classList.add('active');
 
   const hash = SCREEN_ROUTES[id] ?? '#/';
   if (replace) history.replaceState({ screen: id }, '', hash);
@@ -101,12 +91,11 @@ window.addEventListener('popstate', e => {
   }
 
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  byId(`screen-${screen}`)?.classList.add('active');
+  byId(`screen-${screen}`).classList.add('active');
 });
 
 function toast(msg, icon = '') {
   const el = byId('toast');
-  if (!el) return;
   el.replaceChildren();
   if (icon) {
     const iconEl = document.createElement('span');
@@ -129,7 +118,6 @@ function renderQR(url) {
   img.className = 'rounded-lg';
   img.width = img.height = 180;
   const c = byId('qr-container');
-  if (!c) return;
   c.innerHTML = '';
   c.appendChild(img);
 }
@@ -137,7 +125,6 @@ function renderQR(url) {
 function launchConfetti() {
   const colors = ['#7C3AED', '#A78BFA', '#F59E0B', '#34D399', '#F87171', '#60A5FA', '#FB923C'];
   const container = byId('confetti-container');
-  if (!container) return;
   container.innerHTML = '';
   for (let i = 0; i < 90; i++) {
     const p = document.createElement('div');
@@ -189,7 +176,6 @@ function upsertPlayer(player) {
   const existing = state.players.findIndex(x => x.id === p.id);
   if (existing >= 0) state.players[existing] = { ...state.players[existing], ...p };
   else state.players.push(p);
-  if (state.scores[p.id] == null) state.scores[p.id] = 0;
   return p;
 }
 
@@ -198,7 +184,6 @@ function saveActiveSession() {
   localStorage.setItem(SESSION_KEY, JSON.stringify({
     roomCode: state.room.code,
     roomId: state.room.id,
-    hostId: state.hostId,
     isHost: state.isHost,
     userId: sid(),
     savedAt: Date.now(),
@@ -218,98 +203,6 @@ function getSavedSession() {
     clearActiveSession();
     return null;
   }
-}
-
-function boolSetting(value, fallback = false) {
-  if (value === undefined || value === null) return fallback;
-  if (typeof value === 'boolean') return value;
-  if (typeof value === 'number') return value === 1;
-  return ['true', '1', 'yes', 'on'].includes(String(value).toLowerCase());
-}
-
-function normalizeSettings(settings = {}) {
-  return {
-    rounds: Math.max(1, Number(settings.rounds ?? 5)),
-    points: boolSetting(settings.points, true),
-    privateVote: boolSetting(settings.privateVote, false),
-    useQuestions: boolSetting(settings.useQuestions, true),
-    questionVisible: boolSetting(settings.questionVisible, true),
-    roundTimeLimit: Math.max(0, Number(settings.roundTimeLimit ?? 30)),
-  };
-}
-
-function normalizeGameState(raw = {}) {
-  if (!raw) return {};
-  if (typeof raw === 'string') {
-    try { return JSON.parse(raw); } catch { return {}; }
-  }
-  return raw;
-}
-
-function extractRoomCode(roomData, fallback = '') {
-  return String(roomData.room_code ?? roomData.code ?? fallback ?? '').toUpperCase();
-}
-
-function extractRoomId(roomData) {
-  return String(roomData.room_id ?? roomData.id ?? '');
-}
-
-function extractPlayers(roomData = {}, gameState = {}) {
-  const rawPlayers = gameState.players ?? roomData.players ?? roomData.users ?? roomData.members ?? [];
-  return rawPlayers.map(normPlayer);
-}
-
-function setHost(hostId) {
-  state.hostId = hostId ? String(hostId) : state.hostId;
-  state.isHost = Boolean(state.hostId && state.hostId === sid());
-}
-
-function buildGameState(lastEvent = null, overrides = {}) {
-  return {
-    status: overrides.status ?? state.roomStatus,
-    hostId: state.hostId,
-    players: state.players,
-    settings: state.settings,
-    currentRound: state.currentRound,
-    currentQuestion: state.currentQuestion,
-    currentInventorId: state.currentInventorId,
-    votes: state.votes,
-    scores: state.scores,
-    timerStartedAt: state.timerStartedAt,
-    timerEndsAt: state.timerEndsAt,
-    timerExpired: state.timerExpired,
-    lastEvent: lastEvent ?? null,
-    updatedAt: Date.now(),
-  };
-}
-
-async function persistRoomState(lastEvent = null, { status, roomSettings } = {}) {
-  if (!state.room?.code) return;
-  const nextStatus = status ?? state.roomStatus;
-  const gameState = buildGameState(lastEvent, { status: nextStatus });
-  try {
-    await api.updateRoomState(state.room.code, {
-      gameState,
-      status: nextStatus,
-      roomSettings: roomSettings ?? state.settings,
-    });
-  } catch (error) {
-    console.warn('No se pudo persistir el estado de la sala', error);
-  }
-}
-
-function scheduleStateSync() {
-  clearTimeout(state.syncTimer);
-  state.syncTimer = setTimeout(() => persistRoomState(), 250);
-}
-
-function makeEvent(data) {
-  return {
-    ...data,
-    eventId: data.eventId ?? `${Date.now()}-${Math.random().toString(16).slice(2)}-${sid()}`,
-    fromId: data.fromId ?? sid(),
-    createdAt: data.createdAt ?? Date.now(),
-  };
 }
 
 function injectDynamicUI() {
@@ -380,7 +273,6 @@ function injectDynamicUI() {
       }
       .timer-danger #round-timer-label { color:#f87171; }
       .timer-danger #round-timer-bar { background:linear-gradient(90deg,#ef4444,#f97316); }
-      button:disabled { opacity:.55; cursor:not-allowed; box-shadow:none !important; }
     `;
     document.head.appendChild(style);
   }
@@ -392,36 +284,38 @@ async function loadSocketConnector() {
     socketConnectorPromise = import('https://esm.sh/itty-sockets')
       .then(mod => mod.connect)
       .catch(error => {
-        console.warn('No se pudo cargar itty-sockets. Se usará fallback por API.', error);
+        console.warn('No se pudo cargar itty-sockets. Se usará fallback local.', error);
         return null;
       });
   }
   return socketConnectorPromise;
 }
 
-function stopPolling() {
-  clearInterval(state.pollTimer);
-  state.pollTimer = null;
-}
-
-function startPolling(roomCode) {
-  if (!roomCode) return false;
-  stopPolling();
-  state.socketReady = false;
-  state.socketRoomCode = roomCode;
-  pollRoom(roomCode);
-  state.pollTimer = setInterval(() => pollRoom(roomCode), API_POLL_MS);
-  return true;
-}
-
 function closeSocket(manual = true) {
   state.socketManualClose = manual;
   clearTimeout(state.socketReconnectTimer);
   state.socketReconnectTimer = null;
-  stopPolling();
   state.socketReady = false;
-  try { state.socket?.close?.(); } catch { }
+  try { state.socket?.close?.(); } catch {}
   state.socket = null;
+  try { state.fallbackChannel?.close?.(); } catch {}
+  state.fallbackChannel = null;
+}
+
+function setupFallbackChannel(roomCode) {
+  if (!('BroadcastChannel' in window)) return false;
+  try {
+    state.fallbackChannel?.close?.();
+    const channel = new BroadcastChannel(`democrazy-${roomCode}`);
+    channel.onmessage = event => handleSocketMessage(event.data);
+    state.fallbackChannel = channel;
+    state.socketReady = true;
+    flushPendingMessages();
+    return true;
+  } catch (error) {
+    console.warn('Fallback BroadcastChannel no disponible', error);
+    return false;
+  }
 }
 
 async function connectSocket(roomCode, { reconnect = false } = {}) {
@@ -436,13 +330,13 @@ async function connectSocket(roomCode, { reconnect = false } = {}) {
 
   const connect = await loadSocketConnector();
   if (!connect) {
-    const ready = startPolling(roomCode);
-    if (ready) toast('Conexión de respaldo por API activada', '📡');
-    return ready;
+    const fallbackReady = setupFallbackChannel(roomCode);
+    if (fallbackReady) toast('Conexión local de respaldo activada', '📡');
+    else toast('No se pudo abrir la conexión en tiempo real', '⚠️');
+    return fallbackReady;
   }
 
   try {
-    stopPolling();
     state.socket = connect(`democrazy-${roomCode}`);
     state.socketReady = true;
     state.socketReconnectAttempts = 0;
@@ -460,8 +354,8 @@ async function connectSocket(roomCode, { reconnect = false } = {}) {
       state.socketReady = false;
       if (state.socketManualClose || !state.socketRoomCode) return;
       if (state.socketReconnectAttempts >= SOCKET_MAX_RETRIES) {
-        startPolling(state.socketRoomCode);
-        toast('Conexión de respaldo por API activada', '📡');
+        if (setupFallbackChannel(state.socketRoomCode)) toast('Conexión de respaldo activada', '📡');
+        else toast('Conexión perdida. Revisa tu red.', '⚠️');
         return;
       }
       state.socketReconnectAttempts += 1;
@@ -478,114 +372,41 @@ async function connectSocket(roomCode, { reconnect = false } = {}) {
   } catch (error) {
     console.warn('socket connect error', error);
     state.socketReady = false;
-    startPolling(roomCode);
-    return true;
+    return setupFallbackChannel(roomCode);
   }
 }
 
 function flushPendingMessages() {
   const queued = state.pendingMessages.splice(0);
-  queued.forEach(event => sendSocketEvent(event));
+  queued.forEach(data => emit(data));
 }
 
-function sendSocketEvent(event) {
+function emit(data) {
+  if (!data) return;
+  const payload = JSON.stringify(data);
   if (state.socketReady && state.socket?.send) {
-    state.socket.send(JSON.stringify(event));
-    return true;
+    state.socket.send(payload);
+    return;
   }
-  return false;
+  if (state.socketReady && state.fallbackChannel) {
+    state.fallbackChannel.postMessage(data);
+    handleSocketMessage(data);
+    return;
+  }
+  state.pendingMessages.push(data);
 }
 
-function emit(data, { persist = true, status, roomSettings } = {}) {
-  if (!data) return null;
-  const event = makeEvent(data);
-  state.appliedEventIds.add(event.eventId);
-  state.lastEventId = event.eventId;
-
-  if (!sendSocketEvent(event)) {
-    state.pendingMessages.push(event);
-  }
-
-  if (persist) {
-    persistRoomState(event, { status, roomSettings });
-  }
-
-  return event;
-}
-
-async function pollRoom(roomCode = state.room?.code) {
-  if (!roomCode) return;
-  try {
-    const roomData = await api.getRoom(roomCode);
-    applyRoomSnapshot(roomData, { render: true });
-  } catch (error) {
-    console.warn('No se pudo refrescar la sala', error);
-  }
-}
-
-function applyRoomSnapshot(roomData = {}, { render = false } = {}) {
-  const gameState = normalizeGameState(roomData.game_state ?? roomData.gameState ?? {});
-  const roomCode = extractRoomCode(roomData, state.room?.code);
-  if (roomCode) state.room = { code: roomCode, id: extractRoomId(roomData) || state.room?.id || '' };
-
-  setHost(gameState.hostId ?? roomData.host_id ?? roomData.hostId ?? state.hostId ?? getSavedSession()?.hostId);
-  state.roomStatus = gameState.status ?? roomData.status ?? state.roomStatus;
-  state.settings = normalizeSettings(gameState.settings ?? roomData.room_settings ?? roomData.settings ?? state.settings);
-  state.players = extractPlayers(roomData, gameState);
-  upsertPlayer(currentPlayer());
-
-  state.currentRound = Number(gameState.currentRound ?? state.currentRound ?? 0);
-  state.currentQuestion = gameState.currentQuestion !== undefined ? gameState.currentQuestion : state.currentQuestion;
-  state.currentInventorId = gameState.currentInventorId !== undefined && gameState.currentInventorId !== null
-    ? String(gameState.currentInventorId)
-    : state.currentInventorId;
-  state.votes = gameState.votes ?? state.votes ?? {};
-  state.scores = gameState.scores ?? state.scores ?? {};
-  state.timerStartedAt = gameState.timerStartedAt ?? state.timerStartedAt;
-  state.timerEndsAt = gameState.timerEndsAt ?? state.timerEndsAt;
-  state.timerExpired = Boolean(gameState.timerExpired ?? state.timerExpired);
-
-  const lastEvent = gameState.lastEvent;
-  if (lastEvent?.eventId && !state.appliedEventIds.has(lastEvent.eventId)) {
-    handleSocketMessage(lastEvent);
-  } else if (render) {
-    renderCurrentStatus();
-  }
-
-  saveActiveSession();
-}
-
-function renderCurrentStatus() {
-  renderWaitingPlayers();
-  renderScoresHeader();
-  renderVoteGrid();
-  renderVoteStatus();
-
-  const screen = activeScreen();
-  if (screen === 'game') syncTimerFromState();
-}
-
-function handleSocketMessage(data = {}) {
-  if (!data.type) return;
-  if (data.eventId) {
-    if (state.appliedEventIds.has(data.eventId)) return;
-    state.appliedEventIds.add(data.eventId);
-    state.lastEventId = data.eventId;
-  }
-
+function handleSocketMessage(data) {
   switch (data.type) {
     case 'player_joined': {
       const p = upsertPlayer(data.player);
+      if (p && state.scores[p.id] == null) state.scores[p.id] = 0;
       renderWaitingPlayers();
-      if (state.isHost && p) {
-        emit({ type: 'room_update', players: state.players, hostId: state.hostId });
-        scheduleStateSync();
-      }
+      if (state.isHost) emit({ type: 'room_update', players: state.players });
       break;
     }
     case 'room_update':
       state.players = (data.players ?? []).map(normPlayer);
-      if (data.hostId) setHost(data.hostId);
       renderWaitingPlayers();
       renderVoteStatus();
       break;
@@ -594,89 +415,81 @@ function handleSocketMessage(data = {}) {
       delete state.votes[String(data.playerId)];
       renderWaitingPlayers();
       renderVoteStatus();
-      if (state.isHost) scheduleStateSync();
       break;
     case 'game_started':
-      state.roomStatus = 'playing';
       state.settings = normalizeSettings(data.settings);
       state.players = (data.players ?? []).map(normPlayer);
-      if (data.hostId) setHost(data.hostId);
+      state.currentRound = 0;
       state.scores = {};
       state.players.forEach(p => { state.scores[p.id] = 0; });
       saveActiveSession();
       _startRound(data.firstRound);
       break;
     case 'question_set':
-      if (data.round && Number(data.round) !== state.currentRound) return;
       state.currentQuestion = String(data.question || '');
       state.currentInventorId = data.inventorId ? String(data.inventorId) : state.currentInventorId;
-      state.timerExpired = false;
       renderQuestionArea();
       renderVoteGrid();
       renderVoteStatus();
-      if (state.isHost) maybeStartRoundTimer();
       break;
     case 'timer_sync':
-      if (!state.isHost && Number(data.round) === state.currentRound) {
-        const remaining = Number(data.remaining ?? 0);
-        if (data.timerEndsAt) state.timerEndsAt = Number(data.timerEndsAt);
-        startTimer(remaining, { fromHost: true });
+      if (!state.isHost && data.round === state.currentRound) {
+        startTimer(Number(data.remaining ?? 0), { fromHost: true });
       }
       break;
     case 'round_timeout':
-      if (Number(data.round) === state.currentRound) {
+      if (data.round === state.currentRound) {
         state.timerExpired = true;
         stopTimer(false);
         renderTimer(0);
         renderVoteStatus();
-        if (!state.isHost) toast('Tiempo agotado. Esperando resultados...', '⏱️');
+        if (!state.isHost) {
+          toast('Tiempo agotado. Esperando resultados...', '⏱️');
+        }
       }
       break;
     case 'vote_cast':
       state.votes[String(data.voterId)] = String(data.votedId);
       renderVoteStatus();
-      if (state.isHost) {
-        scheduleStateSync();
-        if (Object.keys(state.votes).length >= state.players.length) _doReveal();
-      }
+      if (state.isHost && Object.keys(state.votes).length >= state.players.length) _doReveal();
       break;
     case 'round_reveal':
       stopTimer();
-      state.roomStatus = 'reveal';
       state.votes = data.votes ?? {};
       state.scores = data.scores ?? {};
-      _showReveal(Number(data.round), data.question);
+      _showReveal(data.round, data.question);
       break;
     case 'next_round':
-      state.roomStatus = 'playing';
       _startRound(data.round);
       break;
     case 'game_over':
       stopTimer();
-      state.roomStatus = 'final';
       state.scores = data.scores ?? {};
       _showFinal();
       break;
-    case 'new_room_created':
+    case 'new_game':
       stopTimer();
-      state.roomStatus = 'waiting';
-      state.room = data.room;
-      state.settings = normalizeSettings(data.settings ?? state.settings);
-      state.players = (data.players ?? state.players).map(normPlayer);
-      setHost(data.hostId ?? state.hostId);
+      state.players = (data.players ?? []).map(normPlayer);
+      state.currentRound = 0;
       state.votes = {};
       state.scores = {};
-      state.currentRound = 0;
-      state.currentQuestion = null;
-      state.currentInventorId = null;
       state.hasVoted = false;
-      connectSocket(state.room.code).then(() => {
-        emit({ type: 'player_joined', player: currentPlayer() });
-      });
-      saveActiveSession();
-      App._enterWaiting();
+      renderWaitingPlayers();
+      showScreen('waiting');
+      history.replaceState({ screen: 'waiting' }, '', `#/sala/${state.room.code}`);
       break;
   }
+}
+
+function normalizeSettings(settings = {}) {
+  return {
+    rounds: Number(settings.rounds ?? 5),
+    points: settings.points ?? true,
+    privateVote: settings.privateVote ?? false,
+    useQuestions: settings.useQuestions ?? true,
+    questionVisible: settings.questionVisible ?? true,
+    roundTimeLimit: Number(settings.roundTimeLimit ?? 30),
+  };
 }
 
 window.App = {
@@ -702,10 +515,6 @@ window.App = {
     const code = new URLSearchParams(location.search).get('sala');
     if (code) sessionStorage.setItem('pending_room', code.toUpperCase());
     history.replaceState({ screen: 'login' }, '', '#/');
-
-    if (state.user && getSavedSession()) {
-      setTimeout(() => App._enterLobby(), 0);
-    }
   },
 
   useExistingUser() { App._enterLobby(); },
@@ -742,7 +551,6 @@ window.App = {
 
   switchUser() {
     clearActiveSession();
-    closeSocket(true);
     localStorage.removeItem('democrazy_user');
     state.user = null;
     byId('existing-user-card').classList.add('hidden');
@@ -773,10 +581,15 @@ window.App = {
     try {
       toast('Reconectando a la sala...', '🔄');
       const roomData = await api.getRoom(code);
-      applyRoomSnapshot(roomData, { render: false });
-      await connectSocket(state.room.code);
+      state.room = { code, id: String(roomData.id ?? roomData.room_id ?? '') };
+      state.isHost = Boolean(getSavedSession()?.isHost);
+      const rawPlayers = roomData.players ?? roomData.users ?? roomData.members ?? [];
+      state.players = rawPlayers.map(normPlayer);
+      upsertPlayer(currentPlayer());
+      state.settings = normalizeSettings(roomData.room_settings ?? roomData.settings ?? state.settings);
+      await connectSocket(code);
       emit({ type: 'player_joined', player: currentPlayer() });
-      restoreScreenFromState();
+      App._enterWaiting();
       toast('Has vuelto a la sala', '✅');
     } catch (error) {
       clearActiveSession();
@@ -797,26 +610,12 @@ window.App = {
         questionVisible: true,
         roundTimeLimit: 30,
       });
-      const initialState = {
-        status: 'waiting',
-        hostId: sid(),
-        players: [currentPlayer()],
-        settings,
-        currentRound: 0,
-        votes: {},
-        scores: {},
-      };
-      const res = await api.createRoom(GAME_ID, sid(), settings, initialState);
-      state.room = { code: String(res.room_code ?? res.code).toUpperCase(), id: String(res.room_id ?? res.id ?? '') };
-      state.roomStatus = 'waiting';
-      state.hostId = sid();
+      const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting' });
+      state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.isHost = true;
       state.players = [currentPlayer()];
       state.settings = settings;
-      state.votes = {};
-      state.scores = { [sid()]: 0 };
       await connectSocket(state.room.code);
-      await persistRoomState(null, { status: 'waiting', roomSettings: settings });
       saveActiveSession();
       App._enterWaiting();
     } catch (e) {
@@ -835,10 +634,13 @@ window.App = {
     if (code.length < 4) return;
     try {
       await api.joinRoom(code, sid());
+      state.isHost = false;
       const roomData = await api.getRoom(code);
-      applyRoomSnapshot(roomData, { render: false });
-      state.isHost = state.hostId === sid();
+      state.room = { code, id: String(roomData.id ?? roomData.room_id ?? '') };
+      const rawPlayers = roomData.players ?? roomData.users ?? roomData.members ?? [];
+      state.players = rawPlayers.map(normPlayer);
       upsertPlayer(currentPlayer());
+      state.settings = normalizeSettings(roomData.room_settings ?? roomData.settings ?? state.settings);
       await connectSocket(code);
       emit({ type: 'player_joined', player: currentPlayer() });
       saveActiveSession();
@@ -882,9 +684,9 @@ window.App = {
     const url = `${location.origin}${location.pathname}?sala=${state.room.code}`;
     if (navigator.share) {
       try { await navigator.share({ title: 'Democrazy', text: `Únete con código: ${state.room.code}`, url }); }
-      catch { }
+      catch {}
     } else {
-      await navigator.clipboard.writeText(url);
+      navigator.clipboard.writeText(url);
       toast('Enlace copiado', '📋');
     }
   },
@@ -907,13 +709,6 @@ window.App = {
   },
 
   async startGame() {
-    if (!state.isHost) return;
-    if (state.players.length < 2) {
-      toast('Necesitas al menos 2 jugadores para empezar', '👥');
-      renderStartButton();
-      return;
-    }
-
     const settings = normalizeSettings({
       rounds: parseInt(byId('cfg-rounds').value) || 5,
       points: byId('cfg-points').checked,
@@ -923,17 +718,11 @@ window.App = {
       roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
     });
     state.settings = settings;
-    state.roomStatus = 'playing';
-    state.scores = {};
+    await api.updateRoomState(state.room.code, { status: 'playing', roomSettings: settings });
+    const firstRound = _buildRound(1);
+    emit({ type: 'game_started', settings, players: state.players, firstRound });
     state.players.forEach(p => { state.scores[p.id] = 0; });
     state.currentRound = 0;
-    const firstRound = _buildRound(1);
-    const event = emit({ type: 'game_started', settings, players: state.players, hostId: state.hostId, firstRound }, {
-      persist: false,
-      status: 'playing',
-      roomSettings: settings,
-    });
-    await persistRoomState(event, { status: 'playing', roomSettings: settings });
     saveActiveSession();
     _startRound(firstRound);
   },
@@ -951,9 +740,8 @@ window.App = {
       return;
     }
     state.currentQuestion = question;
-    state.timerExpired = false;
     emit({ type: 'question_set', round: state.currentRound, question, inventorId: state.currentInventorId });
-    if (state.isHost) maybeStartRoundTimer();
+    maybeStartRoundTimer();
     renderQuestionArea();
     renderVoteGrid();
     renderVoteStatus();
@@ -961,10 +749,8 @@ window.App = {
 
   castVote(votedId) {
     if (state.hasVoted || !state.currentQuestion || state.timerExpired) return;
-    const tid = String(votedId);
-    if (tid === sid()) return;
-
     state.hasVoted = true;
+    const tid = String(votedId);
     state.votes[sid()] = tid;
 
     document.querySelectorAll('.vote-card').forEach(c => {
@@ -983,66 +769,34 @@ window.App = {
   },
 
   nextRound() {
-    if (!state.isHost) return;
     stopTimer();
     if (state.currentRound >= state.settings.rounds) {
       const scores = { ...state.scores };
-      state.roomStatus = 'final';
+      emit({ type: 'game_over', scores });
       state.scores = scores;
-      const event = emit({ type: 'game_over', scores }, { persist: false, status: 'final' });
-      persistRoomState(event, { status: 'final' });
       _showFinal();
       return;
     }
     const round = _buildRound(state.currentRound + 1);
-    state.roomStatus = 'playing';
-    const event = emit({ type: 'next_round', round }, { persist: false, status: 'playing' });
-    persistRoomState(event, { status: 'playing' });
+    emit({ type: 'next_round', round });
     _startRound(round);
   },
 
   async newGame() {
-    if (!state.isHost) return;
     try {
       stopTimer();
-      const previousRoomCode = state.room.code;
-      const players = state.players.map(normPlayer);
-      const initialState = {
-        status: 'waiting',
-        hostId: sid(),
-        players,
-        settings: state.settings,
-        currentRound: 0,
-        votes: {},
-        scores: {},
-      };
-      const res = await api.createRoom(GAME_ID, sid(), state.settings, initialState);
-      const newRoom = { code: String(res.room_code ?? res.code).toUpperCase(), id: String(res.room_id ?? res.id ?? '') };
-
-      emit({
-        type: 'new_room_created',
-        room: newRoom,
-        settings: state.settings,
-        players,
-        hostId: sid(),
-      }, { persist: true, status: 'waiting' });
-
-      state.room = newRoom;
-      state.roomStatus = 'waiting';
-      state.hostId = sid();
+      const res = await api.createRoom(GAME_ID, sid(), state.settings, { status: 'waiting' });
+      state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.isHost = true;
-      state.players = players;
       state.votes = {};
-      state.scores = {};
       state.currentRound = 0;
       state.currentQuestion = null;
       state.currentInventorId = null;
       state.hasVoted = false;
       await connectSocket(state.room.code);
-      await persistRoomState(null, { status: 'waiting', roomSettings: state.settings });
+      emit({ type: 'new_game', players: state.players });
       saveActiveSession();
       App._enterWaiting();
-      console.info(`Nueva sala creada desde ${previousRoomCode}: ${state.room.code}`);
     } catch (e) {
       toast('Error: ' + (e.message || 'desconocido'), '⚠️');
     }
@@ -1053,31 +807,12 @@ window.App = {
     closeSocket(true);
     clearActiveSession();
     state.room = null;
-    state.roomStatus = 'waiting';
-    state.hostId = null;
     state.isHost = false;
     state.players = [];
     byId('lobby-username').textContent = state.user.username;
     showScreen('lobby');
   },
 };
-
-function restoreScreenFromState() {
-  renderWaitingPlayers();
-  if (state.roomStatus === 'playing' && state.currentRound > 0) {
-    renderRoundFromState();
-    return;
-  }
-  if (state.roomStatus === 'reveal' && state.currentRound > 0) {
-    _showReveal(state.currentRound, state.currentQuestion);
-    return;
-  }
-  if (state.roomStatus === 'final') {
-    _showFinal();
-    return;
-  }
-  App._enterWaiting();
-}
 
 function animateVoteCard(card) {
   card.classList.remove('vote-pop');
@@ -1093,20 +828,13 @@ function animateVoteCard(card) {
 
 function _buildRound(roundNum) {
   if (state.settings.useQuestions) {
-    const pool = questionBank();
-    const question = pool.length
-      ? pool[Math.floor(Math.random() * pool.length)]
-      : '¿Quién del grupo ganaría este juego?';
-    return { roundNum, question, inventorId: null };
+    return { roundNum, question: questions[Math.floor(Math.random() * questions.length)], inventorId: null };
   }
-  const selected = state.players[Math.floor(Math.random() * state.players.length)];
-  return { roundNum, question: null, inventorId: selected?.id ?? sid() };
+  return { roundNum, question: null, inventorId: state.players[Math.floor(Math.random() * state.players.length)]?.id ?? sid() };
 }
 
 function _doReveal() {
-  if (!state.isHost) return;
   stopTimer(false);
-  state.roomStatus = 'reveal';
   const voteCounts = {};
   state.players.forEach(p => { voteCounts[p.id] = 0; });
   Object.values(state.votes).forEach(vid => { voteCounts[String(vid)] = (voteCounts[String(vid)] || 0) + 1; });
@@ -1121,48 +849,20 @@ function _doReveal() {
     }
   }
 
-  const event = emit({
-    type: 'round_reveal',
-    round: state.currentRound,
-    question: state.currentQuestion,
-    votes: state.votes,
-    scores: state.scores,
-  }, { persist: false, status: 'reveal' });
-  persistRoomState(event, { status: 'reveal' });
+  emit({ type: 'round_reveal', round: state.currentRound, question: state.currentQuestion, votes: state.votes, scores: state.scores });
   _showReveal(state.currentRound, state.currentQuestion);
 }
 
 function maybeStartRoundTimer() {
-  if (!state.currentQuestion || !state.isHost) return;
+  if (!state.currentQuestion) return;
   const limit = Number(state.settings.roundTimeLimit || 0);
   if (limit <= 0) {
     stopTimer(false);
     renderTimer(null);
-    state.timerStartedAt = null;
-    state.timerEndsAt = null;
-    scheduleStateSync();
     return;
   }
-  state.timerStartedAt = Date.now();
-  state.timerEndsAt = state.timerStartedAt + limit * 1000;
   startTimer(limit);
-  emit({ type: 'timer_sync', round: state.currentRound, remaining: limit, timerEndsAt: state.timerEndsAt });
-}
-
-function syncTimerFromState() {
-  const limit = Number(state.settings.roundTimeLimit || 0);
-  if (!state.currentQuestion || limit <= 0 || !state.timerEndsAt) {
-    renderTimer(null);
-    return;
-  }
-  const remaining = Math.max(0, Math.ceil((Number(state.timerEndsAt) - Date.now()) / 1000));
-  if (remaining <= 0) {
-    state.timerExpired = true;
-    renderTimer(0);
-    renderVoteStatus();
-    return;
-  }
-  startTimer(remaining, { fromHost: !state.isHost });
+  if (state.isHost) emit({ type: 'timer_sync', round: state.currentRound, remaining: limit });
 }
 
 function startTimer(seconds, { fromHost = false } = {}) {
@@ -1175,25 +875,30 @@ function startTimer(seconds, { fromHost = false } = {}) {
 
   state.timerExpired = false;
   state.timerRemaining = limit;
-  state.timerEndsAt = state.timerEndsAt || Date.now() + limit * 1000;
+  state.timerEndsAt = Date.now() + limit * 1000;
   renderTimer(limit);
 
   state.timerInterval = setInterval(() => {
-    const remaining = Math.max(0, Math.ceil((Number(state.timerEndsAt) - Date.now()) / 1000));
+    const remaining = Math.max(0, Math.ceil((state.timerEndsAt - Date.now()) / 1000));
     state.timerRemaining = remaining;
     renderTimer(remaining);
 
-    if (state.isHost && !fromHost && remaining > 0 && remaining % 5 === 0) {
-      emit({ type: 'timer_sync', round: state.currentRound, remaining, timerEndsAt: state.timerEndsAt });
+    if (state.isHost && remaining > 0 && remaining % 5 === 0) {
+      emit({ type: 'timer_sync', round: state.currentRound, remaining });
     }
 
     if (remaining <= 0) {
       stopTimer(false);
       state.timerExpired = true;
-      renderVoteStatus();
-      if (state.isHost && !fromHost) {
-        emit({ type: 'round_timeout', round: state.currentRound });
-        _doReveal();
+      emit({ type: 'round_timeout', round: state.currentRound });
+      if (state.isHost) {
+        if (Object.keys(state.votes).length > 0) _doReveal();
+        else {
+          toast('Ronda sin votos. Pasando a resultados.', '⏱️');
+          _doReveal();
+        }
+      } else if (!fromHost) {
+        renderVoteStatus();
       }
     }
   }, 250);
@@ -1202,6 +907,7 @@ function startTimer(seconds, { fromHost = false } = {}) {
 function stopTimer(hide = true) {
   clearInterval(state.timerInterval);
   state.timerInterval = null;
+  state.timerEndsAt = null;
   if (hide) renderTimer(null);
 }
 
@@ -1227,9 +933,7 @@ function renderTimer(remaining) {
 
 function renderWaitingPlayers() {
   const c = byId('waiting-players');
-  const count = byId('waiting-count');
-  if (!c || !count) return;
-  count.textContent = state.players.length;
+  byId('waiting-count').textContent = state.players.length;
   c.innerHTML = state.players.map((p, i) => {
     const username = escapeHTML(p.username);
     return `
@@ -1239,44 +943,28 @@ function renderWaitingPlayers() {
         </div>
         <span class="flex-1 font-semibold truncate">${username}</span>
         ${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}
-        ${p.id === state.hostId ? '<span class="text-xs bg-brand/20 text-brand-light px-2.5 py-0.5 rounded-full font-bold">Host</span>' : ''}
+        ${i === 0 ? '<span class="text-xs bg-brand/20 text-brand-light px-2.5 py-0.5 rounded-full font-bold">Host</span>' : ''}
       </div>
     `;
   }).join('');
-  renderStartButton();
-}
-
-function renderStartButton() {
-  const button = byId('admin-start')?.querySelector('button');
-  if (!button) return;
-  const canStart = state.players.length >= 2;
-  button.disabled = !canStart;
-  button.textContent = canStart ? '¡Comenzar partida! 🚀' : 'Esperando más jugadores';
 }
 
 function _startRound({ roundNum, question, inventorId }) {
   stopTimer();
-  state.roomStatus = 'playing';
-  state.currentRound = Number(roundNum);
+  state.currentRound = roundNum;
   state.currentQuestion = question ? String(question) : null;
   state.currentInventorId = inventorId ? String(inventorId) : null;
   state.votes = {};
   state.hasVoted = false;
   state.timerExpired = false;
-  state.timerStartedAt = null;
-  state.timerEndsAt = null;
+  state.lastRoundToken = `${roundNum}-${Date.now()}`;
 
-  renderRoundFromState();
-  maybeStartRoundTimer();
-}
-
-function renderRoundFromState() {
-  byId('game-round').textContent = state.currentRound;
+  byId('game-round').textContent = roundNum;
   byId('game-rounds').textContent = state.settings.rounds;
   byId('voted-feedback').classList.add('hidden');
   byId('voted-feedback').textContent = '✓ Voto registrado';
 
-  const pct = ((state.currentRound - 1) / state.settings.rounds) * 100;
+  const pct = ((roundNum - 1) / state.settings.rounds) * 100;
   byId('round-progress').style.width = pct + '%';
 
   renderQuestionArea();
@@ -1284,13 +972,12 @@ function renderRoundFromState() {
   renderVoteGrid();
   renderVoteStatus();
   showScreen('game');
-  syncTimerFromState();
+  maybeStartRoundTimer();
 }
 
 function renderQuestionArea() {
   const inventorEl = byId('question-inventor');
   const qEl = byId('game-question');
-  if (!inventorEl || !qEl) return;
   const canSeeQuestion = state.settings.questionVisible || state.isHost;
 
   if (state.currentQuestion) {
@@ -1328,7 +1015,6 @@ function renderQuestionArea() {
 
 function renderScoresHeader() {
   const header = byId('game-scores-header');
-  if (!header) return;
   if (!state.settings.points) {
     header.innerHTML = '';
     return;
@@ -1343,11 +1029,11 @@ function renderScoresHeader() {
 
 function renderVoteGrid() {
   const grid = byId('vote-grid');
-  if (!grid) return;
   if (!state.currentQuestion) {
     grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">La votación se activará cuando haya una pregunta.</p>';
     return;
   }
+
   if (state.timerExpired) {
     grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Tiempo agotado. Esperando resultados...</p>';
     return;
@@ -1371,22 +1057,19 @@ function renderVoteGrid() {
 }
 
 function renderVoteStatus() {
-  const status = byId('votes-status');
-  if (!status) return;
   const voted = Object.keys(state.votes).length;
   const total = state.currentQuestion ? state.players.length : 0;
   if (!state.currentQuestion) {
-    status.textContent = 'Esperando pregunta para iniciar la votación';
+    byId('votes-status').textContent = 'Esperando pregunta para iniciar la votación';
   } else if (state.timerExpired) {
-    status.textContent = `Tiempo agotado · ${voted} de ${total} votaron`;
+    byId('votes-status').textContent = `Tiempo agotado · ${voted} de ${total} votaron`;
   } else {
-    status.textContent = `${voted} de ${total} han votado`;
+    byId('votes-status').textContent = `${voted} de ${total} han votado`;
   }
 }
 
 function _showReveal(roundNum, question) {
   stopTimer();
-  state.roomStatus = 'reveal';
   byId('reveal-round').textContent = roundNum;
   const qEl = byId('reveal-question');
   qEl.textContent = question || '';
@@ -1441,7 +1124,6 @@ function _showReveal(roundNum, question) {
 
 function _showFinal() {
   stopTimer();
-  state.roomStatus = 'final';
   launchConfetti();
   const sorted = [...state.players].sort((a, b) => (state.scores[b.id] || 0) - (state.scores[a.id] || 0));
   byId('winner-name').textContent = sorted[0]?.username ?? '—';
