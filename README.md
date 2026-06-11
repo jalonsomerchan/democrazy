@@ -52,6 +52,7 @@ Incluye:
 - validación de mínimo 2 jugadores,
 - cambio de sala al iniciar nueva partida,
 - renderizado de preguntas, categorías, votos y resultados,
+- opciones avanzadas de resultados: ganador único, rojo/verde y ocultación de recuentos,
 - modo de preguntas infinitas,
 - cierre de sala para todos al pulsar **Fin del juego**.
 
@@ -81,6 +82,9 @@ Evita abrir con `file://`.
   infiniteMode: true,
   points: true,
   privateVote: false,
+  showAllResults: true,
+  redGreenMode: false,
+  showVoteCounts: true,
   useQuestions: true,
   questionVisible: true,
   roundTimeLimit: 30,
@@ -94,6 +98,9 @@ Evita abrir con `file://`.
 | `infiniteMode` | La partida no termina sola; el admin debe pulsar **Fin del juego** |
 | `points` | Activa/desactiva puntuación |
 | `privateVote` | Oculta quién votó a quién |
+| `showAllResults` | Si está activo se muestran todos los resultados; si no, solo el jugador más votado |
+| `redGreenMode` | Solo disponible con `showAllResults: false`; muestra pantalla roja al más votado y verde al resto |
+| `showVoteCounts` | Solo configurable con voto secreto; permite ocultar el número de votos |
 | `useQuestions` | Usa preguntas predefinidas |
 | `questionVisible` | Permite ocultar la pregunta a invitados |
 | `roundTimeLimit` | Tiempo máximo por ronda en segundos; `0` desactiva el límite |
@@ -108,6 +115,7 @@ Evita abrir con `file://`.
 - Si falla `itty-sockets`, se usa polling real contra la API en lugar de `BroadcastChannel` local.
 - La reconexión restaura jugadores, settings, ronda, pregunta, votos y puntuaciones desde `game_state`.
 - Las preguntas están agrupadas por categorías seleccionables por el host antes de empezar.
+- El host puede elegir si se muestran todos los resultados, solo el ganador, modo rojo/verde y recuento de votos.
 - La partida avanza indefinidamente hasta que el administrador cierra la sala.
 - Al pulsar **Fin del juego**, todos los jugadores salen de la sala y se borra la sesión activa.
 - La etiqueta de host usa `hostId`, no la posición del jugador en el array.

@@ -16,6 +16,9 @@ const state = {
     infiniteMode: true,
     points: true,
     privateVote: false,
+    showAllResults: true,
+    redGreenMode: false,
+    showVoteCounts: true,
     useQuestions: true,
     questionVisible: true,
     roundTimeLimit: 30,
@@ -165,11 +168,16 @@ function normalizeQuestionCategories(value) {
 }
 
 function normalizeSettings(settings = {}) {
+  const privateVote = Boolean(settings.privateVote ?? false);
+  const showAllResults = Boolean(settings.showAllResults ?? settings.viewAllResults ?? true);
   return {
     rounds: Number(settings.rounds ?? 5),
     infiniteMode: settings.infiniteMode ?? true,
     points: settings.points ?? true,
-    privateVote: settings.privateVote ?? false,
+    privateVote,
+    showAllResults,
+    redGreenMode: !showAllResults && Boolean(settings.redGreenMode ?? settings.redGreen ?? false),
+    showVoteCounts: privateVote ? Boolean(settings.showVoteCounts ?? settings.viewVoteCount ?? true) : true,
     useQuestions: settings.useQuestions ?? true,
     questionVisible: settings.questionVisible ?? true,
     roundTimeLimit: Number(settings.roundTimeLimit ?? 30),
@@ -209,6 +217,10 @@ function currentScreen() {
 
 function playerLabel(player) {
   return String(player?.id ?? '') === sid() ? 'Tú' : String(player?.username ?? '?');
+}
+
+function shouldShowVoteCounts(settings = state.settings) {
+  return !settings.privateVote || settings.showVoteCounts !== false;
 }
 
 function getShareUrl() {
@@ -355,6 +367,17 @@ function injectDynamicUI() {
   if (!byId('cfg-round-time')) {
     roundsCard?.insertAdjacentHTML('afterend', `<div id="round-time-card" class="mx-4 mb-2 glass rounded-2xl"><div class="flex items-center justify-between gap-3 px-4 py-3.5"><div><p class="text-sm font-semibold">Tiempo por ronda</p><p class="text-xs text-zinc-500 mt-0.5">Evita que la partida se quede bloqueada</p></div><select id="cfg-round-time" class="bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"><option value="0">Sin límite</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></div></div>`);
   }
+  if (!byId('result-options-card')) {
+    const voteSettingsCard = byId('cfg-private')?.closest('.glass');
+    voteSettingsCard?.insertAdjacentHTML('afterend', `<div id="result-options-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden divide-y divide-white/5"><div class="px-4 py-3.5"><p class="text-sm font-semibold">Resultados</p><p class="text-xs text-zinc-500 mt-0.5">Controla qué se revela al terminar cada votación</p></div><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver todos los resultados</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, solo se revela el más votado</p></div><span class="toggle"><input id="cfg-show-all-results" type="checkbox" checked /><span class="toggle-track"></span></span></label><label id="cfg-red-green-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Rojo / Verde</p><p class="text-xs text-zinc-500 mt-0.5">Rojo si eres el más votado, verde si no</p></div><span class="toggle"><input id="cfg-red-green" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-vote-count-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver número de votos</p><p class="text-xs text-zinc-500 mt-0.5">Solo configurable cuando el voto es secreto</p></div><span class="toggle"><input id="cfg-show-vote-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
+  }
+  ['cfg-show-all-results', 'cfg-private'].forEach(id => {
+    const input = byId(id);
+    if (input && !input.dataset.resultOptionsBound) {
+      input.dataset.resultOptionsBound = '1';
+      input.addEventListener('input', () => App.updateResultOptionsMode?.());
+    }
+  });
   if (!byId('admin-force-end')) {
     byId('admin-next')?.insertAdjacentHTML('beforeend', `<button id="admin-force-end" type="button" onclick="App.endGameForEveryone()" class="mt-3 w-full bg-red-500/15 hover:bg-red-500/25 border border-red-400/30 text-red-100 py-3 rounded-2xl font-black text-sm uppercase tracking-widest transition">Fin del juego</button>`);
   }
@@ -378,7 +401,7 @@ function injectDynamicUI() {
   if (!byId('democrazy-enhanced-style')) {
     const style = document.createElement('style');
     style.id = 'democrazy-enhanced-style';
-    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}@keyframes epicFlash{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.035)}}@keyframes epicCrownDrop{0%{opacity:0;transform:translateY(-28px) scale(.6) rotate(-10deg)}60%{opacity:1;transform:translateY(4px) scale(1.16) rotate(5deg)}100%{opacity:1;transform:translateY(0) scale(1) rotate(0)}}@keyframes epicNameReveal{0%{opacity:0;filter:blur(16px);letter-spacing:.35em;transform:translateY(18px) scale(.92)}70%{opacity:1;filter:blur(0);letter-spacing:.05em;transform:translateY(-3px) scale(1.04)}100%{opacity:1;filter:blur(0);letter-spacing:.02em;transform:translateY(0) scale(1)}}@keyframes epicCardIn{0%{opacity:0;transform:translateY(22px) scale(.94);filter:blur(10px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}@keyframes epicGlowSweep{0%{transform:translateX(-130%) skewX(-20deg)}100%{transform:translateX(130%) skewX(-20deg)}}.epic-reveal-stage{position:relative;overflow:hidden}.epic-reveal-stage:before{content:'';position:absolute;inset:-40%;background:radial-gradient(circle at 50% 20%,rgba(124,58,237,.32),transparent 34%),radial-gradient(circle at 15% 85%,rgba(245,158,11,.18),transparent 28%);pointer-events:none;animation:epicFlash 2.3s ease-in-out infinite}.epic-reveal-content{position:relative;z-index:1}.epic-winner-name{animation:epicNameReveal .95s cubic-bezier(.18,1.35,.32,1) both;text-shadow:0 0 26px rgba(167,139,250,.55)}.epic-crown{animation:epicCrownDrop .8s cubic-bezier(.18,1.35,.32,1) both}.epic-result-card{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both;position:relative;overflow:hidden}.epic-result-card:after{content:'';position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:epicGlowSweep 1.05s ease-out .15s both;pointer-events:none}.epic-dots span{animation:epicFlash 1s ease-in-out infinite}.epic-dots span:nth-child(2){animation-delay:.15s}.epic-dots span:nth-child(3){animation-delay:.3s}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
+    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}@keyframes epicFlash{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.035)}}@keyframes epicCrownDrop{0%{opacity:0;transform:translateY(-28px) scale(.6) rotate(-10deg)}60%{opacity:1;transform:translateY(4px) scale(1.16) rotate(5deg)}100%{opacity:1;transform:translateY(0) scale(1) rotate(0)}}@keyframes epicNameReveal{0%{opacity:0;filter:blur(16px);letter-spacing:.35em;transform:translateY(18px) scale(.92)}70%{opacity:1;filter:blur(0);letter-spacing:.05em;transform:translateY(-3px) scale(1.04)}100%{opacity:1;filter:blur(0);letter-spacing:.02em;transform:translateY(0) scale(1)}}@keyframes epicCardIn{0%{opacity:0;transform:translateY(22px) scale(.94);filter:blur(10px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}@keyframes epicGlowSweep{0%{transform:translateX(-130%) skewX(-20deg)}100%{transform:translateX(130%) skewX(-20deg)}}.epic-reveal-stage{position:relative;overflow:hidden}.epic-reveal-stage:before{content:'';position:absolute;inset:-40%;background:radial-gradient(circle at 50% 20%,rgba(124,58,237,.32),transparent 34%),radial-gradient(circle at 15% 85%,rgba(245,158,11,.18),transparent 28%);pointer-events:none;animation:epicFlash 2.3s ease-in-out infinite}.epic-reveal-content{position:relative;z-index:1}.epic-winner-name{animation:epicNameReveal .95s cubic-bezier(.18,1.35,.32,1) both;text-shadow:0 0 26px rgba(167,139,250,.55)}.epic-crown{animation:epicCrownDrop .8s cubic-bezier(.18,1.35,.32,1) both}.epic-result-card{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both;position:relative;overflow:hidden}.epic-result-card:after{content:'';position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:epicGlowSweep 1.05s ease-out .15s both;pointer-events:none}.epic-dots span{animation:epicFlash 1s ease-in-out infinite}.epic-dots span:nth-child(2){animation-delay:.15s}.epic-dots span:nth-child(3){animation-delay:.3s}@keyframes redGreenPulse{0%,100%{transform:scale(1);filter:saturate(1)}50%{transform:scale(1.018);filter:saturate(1.25)}}.red-green-red{border-color:rgba(248,113,113,.55)!important;box-shadow:0 0 48px rgba(239,68,68,.24)!important;background:linear-gradient(145deg,rgba(127,29,29,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-green{border-color:rgba(52,211,153,.55)!important;box-shadow:0 0 48px rgba(16,185,129,.24)!important;background:linear-gradient(145deg,rgba(6,78,59,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-badge{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
     document.head.appendChild(style);
   }
 
@@ -753,7 +776,7 @@ window.App = {
       btn.disabled = true;
     }
     try {
-      const settings = normalizeSettings({ rounds: 0, infiniteMode: true, points: true, privateVote: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
+      const settings = normalizeSettings({ rounds: 0, infiniteMode: true, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -824,18 +847,22 @@ window.App = {
       if (byId('cfg-rounds-display')) byId('cfg-rounds-display').textContent = '∞';
       byId('cfg-points').checked = s.points;
       byId('cfg-private').checked = s.privateVote;
+      if (byId('cfg-show-all-results')) byId('cfg-show-all-results').checked = s.showAllResults;
+      if (byId('cfg-red-green')) byId('cfg-red-green').checked = s.redGreenMode;
+      if (byId('cfg-show-vote-counts')) byId('cfg-show-vote-counts').checked = s.showVoteCounts;
       byId('cfg-questions').checked = s.useQuestions;
       byId('cfg-visible').checked = s.questionVisible ?? true;
       if (byId('cfg-round-time')) byId('cfg-round-time').value = String(s.roundTimeLimit ?? 30);
       renderQuestionCategorySettings(s.questionCategories);
       App.updateQuestionMode();
+      App.updateResultOptionsMode();
       App.updateVisibleHint();
     }
     renderWaitingPlayers();
     renderQR(getShareUrl());
     saveActiveSession();
     showScreen('waiting');
-    history.replaceState({ screen: 'waiting' }, '', `#/sala/${state.room.code}`);
+    history.replaceState({ screen: 'waiting' }, '', `?sala=${encodeURIComponent(state.room.code)}`);
   },
 
   toggleQR() { App.openShareModal(); },
@@ -909,6 +936,27 @@ window.App = {
     updateStartButton();
   },
 
+  updateResultOptionsMode() {
+    const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
+    const privateVote = byId('cfg-private')?.checked ?? false;
+    const redGreenRow = byId('cfg-red-green-row');
+    const redGreenInput = byId('cfg-red-green');
+    const voteCountRow = byId('cfg-vote-count-row');
+    const voteCountInput = byId('cfg-show-vote-counts');
+
+    redGreenRow?.classList.toggle('hidden', showAllResults);
+    if (redGreenInput) {
+      redGreenInput.disabled = showAllResults;
+      if (showAllResults) redGreenInput.checked = false;
+    }
+
+    voteCountRow?.classList.toggle('hidden', !privateVote);
+    if (voteCountInput) {
+      voteCountInput.disabled = !privateVote;
+      if (!privateVote) voteCountInput.checked = true;
+    }
+  },
+
   updateQuestionMode() {
     const enabled = byId('cfg-questions')?.checked ?? true;
     const card = byId('question-categories-card');
@@ -945,11 +993,16 @@ window.App = {
       App.updateCategorySummary();
       return;
     }
+    const privateVote = byId('cfg-private').checked;
+    const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
     const settings = normalizeSettings({
       rounds: 0,
       infiniteMode: true,
       points: byId('cfg-points').checked,
-      privateVote: byId('cfg-private').checked,
+      privateVote,
+      showAllResults,
+      redGreenMode: !showAllResults && (byId('cfg-red-green')?.checked ?? false),
+      showVoteCounts: privateVote ? (byId('cfg-show-vote-counts')?.checked ?? true) : true,
       useQuestions,
       questionVisible: byId('cfg-visible').checked,
       roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
@@ -1339,12 +1392,20 @@ function renderEpicVoterList(voters = []) {
 
 function renderEpicResultCard(player, voters = [], index = 0, maxVotes = 1, isWinner = false) {
   const voteTotal = voters.length;
+  const showVoteCounts = shouldShowVoteCounts();
   const barPct = Math.round((voteTotal / maxVotes) * 100);
   const pts = state.scores[player.id] || 0;
   const name = playerLabel(player);
   const medal = index === 0 ? '👑' : (index === 1 ? '🥈' : (index === 2 ? '🥉' : `${index + 1}.`));
-  return `<div class="epic-result-card glass rounded-2xl p-4 ${isWinner ? 'border border-brand/40 shadow-xl shadow-brand/10' : ''}" style="animation-delay:${Math.min(index, 6) * .05}s"><div class="flex items-center gap-3 mb-3"><span class="text-2xl flex-shrink-0">${medal}</span><div class="w-11 h-11 rounded-full bg-gradient-to-br ${avatarGradient(player.username)} flex items-center justify-center font-black shadow-lg flex-shrink-0">${initials(player.username)}</div><div class="flex-1 min-w-0"><p class="font-black truncate ${isWinner ? 'text-brand-light' : 'text-zinc-100'}">${escapeHTML(name)}</p><p class="text-xs text-zinc-500">${voteTotal} voto${voteTotal !== 1 ? 's' : ''}</p></div>${state.settings.points ? `<span class="font-black text-gradient text-lg flex-shrink-0">${pts}pts</span>` : ''}</div><div class="h-2 bg-zinc-900 rounded-full overflow-hidden"><div class="h-full bg-gradient-to-r from-brand via-violet-400 to-amber-300 rounded-full bar-grow" style="width:${barPct}%"></div></div>${renderEpicVoterList(voters)}</div>`;
+  const countHtml = showVoteCounts
+    ? `<p class="text-xs text-zinc-500">${voteTotal} voto${voteTotal !== 1 ? 's' : ''}</p>`
+    : `<p class="text-xs text-zinc-500">Votos ocultos</p>`;
+  const barHtml = showVoteCounts
+    ? `<div class="h-2 bg-zinc-900 rounded-full overflow-hidden"><div class="h-full bg-gradient-to-r from-brand via-violet-400 to-amber-300 rounded-full bar-grow" style="width:${barPct}%"></div></div>`
+    : '';
+  return `<div class="epic-result-card glass rounded-2xl p-4 ${isWinner ? 'border border-brand/40 shadow-xl shadow-brand/10' : ''}" style="animation-delay:${Math.min(index, 6) * .05}s"><div class="flex items-center gap-3 ${showVoteCounts ? 'mb-3' : ''}"><span class="text-2xl flex-shrink-0">${medal}</span><div class="w-11 h-11 rounded-full bg-gradient-to-br ${avatarGradient(player.username)} flex items-center justify-center font-black shadow-lg flex-shrink-0">${initials(player.username)}</div><div class="flex-1 min-w-0"><p class="font-black truncate ${isWinner ? 'text-brand-light' : 'text-zinc-100'}">${escapeHTML(name)}</p>${countHtml}</div>${state.settings.points ? `<span class="font-black text-gradient text-lg flex-shrink-0">${pts}pts</span>` : ''}</div>${barHtml}${renderEpicVoterList(voters)}</div>`;
 }
+
 
 function renderVoteStatus() {
   const el = byId('votes-status');
@@ -1375,10 +1436,21 @@ function _showReveal(roundNum, question) {
 
   const sorted = [...state.players].sort((a, b) => (voteCounts[b.id]?.length || 0) - (voteCounts[a.id]?.length || 0));
   const maxVotes = Math.max(...sorted.map(p => voteCounts[p.id]?.length || 0), 1);
-  const winner = sorted[0];
+  const maxRealVotes = Math.max(...sorted.map(p => voteCounts[p.id]?.length || 0), 0);
+  const winnerIds = maxRealVotes > 0 ? sorted.filter(p => (voteCounts[p.id]?.length || 0) === maxRealVotes).map(p => p.id) : [];
+  const winner = sorted.find(p => winnerIds.includes(p.id)) || sorted[0];
   const winnerVoters = winner ? (voteCounts[winner.id] || []) : [];
   const winnerName = winner ? playerLabel(winner) : '—';
   const hasVotes = winnerVoters.length > 0;
+  const showAllResults = state.settings.showAllResults !== false;
+  const showVoteCounts = shouldShowVoteCounts();
+  const redGreenMode = !showAllResults && state.settings.redGreenMode === true;
+  const currentPlayerIsWinner = redGreenMode && hasVotes && winnerIds.includes(sid());
+  const redGreenClass = redGreenMode ? (currentPlayerIsWinner ? 'red-green-red' : 'red-green-green') : '';
+  const redGreenBadge = redGreenMode
+    ? `<div class="red-green-badge ${currentPlayerIsWinner ? 'bg-red-500/20 border-red-300/30 text-red-100' : 'bg-emerald-500/20 border-emerald-300/30 text-emerald-100'} border rounded-2xl px-4 py-3"><p class="text-xs font-black uppercase tracking-[0.28em]">${currentPlayerIsWinner ? 'Pantalla roja' : 'Pantalla verde'}</p><p class="text-sm font-bold mt-1">${currentPlayerIsWinner ? 'Eres el más votado de esta ronda' : 'No eres el más votado'}</p></div>`
+    : '';
+  const winnerCountHtml = showVoteCounts && hasVotes ? `<p class="text-brand-light font-black text-lg">${winnerVoters.length} voto${winnerVoters.length !== 1 ? 's' : ''}</p>` : '';
   const resultsEl = byId('reveal-results');
   const adminNext = byId('admin-next');
   const guestWait = byId('guest-next-wait');
@@ -1388,11 +1460,16 @@ function _showReveal(roundNum, question) {
   if (state.isHost) byId('next-round-btn').textContent = 'Siguiente pregunta →';
   byId('admin-force-end')?.classList.toggle('hidden', !state.isHost);
 
-  resultsEl.innerHTML = `<div class="epic-reveal-stage glass rounded-[2rem] p-5 sm:p-7 text-center border border-brand/20 shadow-2xl shadow-brand/10"><div class="epic-reveal-content space-y-5"><p class="text-xs sm:text-sm text-zinc-500 font-black uppercase tracking-[0.32em]">Veredicto de la ronda</p><div id="epic-reveal-line" class="min-h-[9.5rem] flex flex-col items-center justify-center gap-4"><p class="text-2xl sm:text-3xl font-black text-zinc-100 uppercase leading-tight">EL MÁS VOTADO ES</p><div class="epic-dots flex gap-2 text-brand-light text-4xl font-black" aria-label="Pausa dramática"><span>•</span><span>•</span><span>•</span></div></div><div id="epic-winner-voters" class="hidden"></div></div></div><div id="epic-other-results" class="space-y-3 mt-4"></div>`;
+  resultsEl.innerHTML = `<div class="epic-reveal-stage ${redGreenClass} glass rounded-[2rem] p-5 sm:p-7 text-center border border-brand/20 shadow-2xl shadow-brand/10"><div class="epic-reveal-content space-y-5"><p class="text-xs sm:text-sm text-zinc-500 font-black uppercase tracking-[0.32em]">Veredicto de la ronda</p><div id="epic-reveal-line" class="min-h-[9.5rem] flex flex-col items-center justify-center gap-4"><p class="text-2xl sm:text-3xl font-black text-zinc-100 uppercase leading-tight">EL MÁS VOTADO ES</p><div class="epic-dots flex gap-2 text-brand-light text-4xl font-black" aria-label="Pausa dramática"><span>•</span><span>•</span><span>•</span></div></div>${redGreenBadge}<div id="epic-winner-voters" class="hidden"></div></div></div><div id="epic-other-results" class="space-y-3 mt-4"></div>`;
 
   launchConfetti();
   showScreen('reveal');
   persistGameState({ status: 'playing' });
+
+  const showRevealActions = () => {
+    byId('admin-next')?.classList.toggle('hidden', !state.isHost);
+    byId('guest-next-wait')?.classList.toggle('hidden', state.isHost);
+  };
 
   scheduleRevealStep(1350, () => {
     const line = byId('epic-reveal-line');
@@ -1401,7 +1478,7 @@ function _showReveal(roundNum, question) {
       line.innerHTML = `<p class="text-xs text-zinc-500 font-black uppercase tracking-[0.32em]">Resultado</p><p class="epic-winner-name text-4xl sm:text-5xl font-black text-gradient uppercase leading-tight">NADIE HA VOTADO</p><p class="text-sm text-zinc-500 max-w-xs mx-auto">La ronda queda sin ganador claro.</p>`;
       return;
     }
-    line.innerHTML = `<div class="epic-crown text-6xl">👑</div><p class="text-xs text-zinc-500 font-black uppercase tracking-[0.32em]">EL MÁS VOTADO ES</p><h2 class="epic-winner-name text-5xl sm:text-6xl font-black text-gradient uppercase leading-none break-words">${escapeHTML(winnerName)}</h2><p class="text-brand-light font-black text-lg">${winnerVoters.length} voto${winnerVoters.length !== 1 ? 's' : ''}</p>`;
+    line.innerHTML = `<div class="epic-crown text-6xl">👑</div><p class="text-xs text-zinc-500 font-black uppercase tracking-[0.32em]">EL MÁS VOTADO ES</p><h2 class="epic-winner-name text-5xl sm:text-6xl font-black text-gradient uppercase leading-none break-words">${escapeHTML(winnerName)}</h2>${winnerCountHtml}`;
   });
 
   if (!state.settings.privateVote && hasVotes) {
@@ -1414,6 +1491,11 @@ function _showReveal(roundNum, question) {
   }
 
   const restDelay = !state.settings.privateVote && hasVotes ? 4100 : 2800;
+  if (!showAllResults) {
+    scheduleRevealStep(restDelay, showRevealActions);
+    return;
+  }
+
   sorted.forEach((player, index) => {
     const delay = restDelay + (index * 650);
     scheduleRevealStep(delay, () => {
@@ -1422,14 +1504,12 @@ function _showReveal(roundNum, question) {
       const voters = voteCounts[player.id] || [];
       otherResults.insertAdjacentHTML('beforeend', renderEpicResultCard(player, voters, index, maxVotes, index === 0 && hasVotes));
       if (index === sorted.length - 1) {
-        scheduleRevealStep(450, () => {
-          byId('admin-next')?.classList.toggle('hidden', !state.isHost);
-          byId('guest-next-wait')?.classList.toggle('hidden', state.isHost);
-        });
+        scheduleRevealStep(450, showRevealActions);
       }
     });
   });
 }
+
 
 function _showFinal() {
   stopTimer();
