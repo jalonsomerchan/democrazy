@@ -16,9 +16,11 @@ const state = {
     infiniteMode: true,
     points: true,
     privateVote: false,
+    adminCountsForVotes: true,
     showAllResults: true,
     redGreenMode: false,
     showVoteCounts: true,
+    hideTies: false,
     useQuestions: true,
     questionVisible: true,
     roundTimeLimit: 30,
@@ -29,6 +31,7 @@ const state = {
   currentInventorId: null,
   votes: {},
   scores: {},
+  roundWinnerIds: [],
   hasVoted: false,
   socket: null,
   socketReady: false,
@@ -175,9 +178,11 @@ function normalizeSettings(settings = {}) {
     infiniteMode: settings.infiniteMode ?? true,
     points: settings.points ?? true,
     privateVote,
+    adminCountsForVotes: settings.adminCountsForVotes ?? settings.adminParticipates ?? true,
     showAllResults,
     redGreenMode: !showAllResults && Boolean(settings.redGreenMode ?? settings.redGreen ?? false),
     showVoteCounts: privateVote ? Boolean(settings.showVoteCounts ?? settings.viewVoteCount ?? true) : true,
+    hideTies: Boolean(settings.hideTies ?? settings.hideTieBreaks ?? false),
     useQuestions: settings.useQuestions ?? true,
     questionVisible: settings.questionVisible ?? true,
     roundTimeLimit: Number(settings.roundTimeLimit ?? 30),
@@ -206,6 +211,7 @@ function getGameState(extra = {}) {
     votes: state.votes,
     scores: state.scores,
     timerExpired: state.timerExpired,
+    roundWinnerIds: state.roundWinnerIds,
     screen: currentScreen(),
     latestEvent: extra.latestEvent ?? null,
   };
@@ -221,6 +227,38 @@ function playerLabel(player) {
 
 function shouldShowVoteCounts(settings = state.settings) {
   return !settings.privateVote || settings.showVoteCounts !== false;
+}
+
+function hideTies(settings = state.settings) {
+  return settings.hideTies === true;
+}
+
+function adminCountsForVotes(settings = state.settings) {
+  return settings.adminCountsForVotes !== false;
+}
+
+function votingPlayers(players = state.players, settings = state.settings) {
+  const all = (players || []).map(normPlayer);
+  if (adminCountsForVotes(settings)) return all;
+  const host = String(state.hostId || '');
+  return all.filter(player => String(player.id) !== host);
+}
+
+function votingPlayerIds(players = state.players, settings = state.settings) {
+  return new Set(votingPlayers(players, settings).map(player => String(player.id)));
+}
+
+function currentUserCanVote() {
+  return votingPlayerIds().has(sid());
+}
+
+function validVoteEntries(votes = state.votes, players = state.players, settings = state.settings) {
+  const ids = votingPlayerIds(players, settings);
+  return Object.entries(votes || {}).filter(([voterId, votedId]) => ids.has(String(voterId)) && ids.has(String(votedId)) && String(voterId) !== String(votedId));
+}
+
+function getAdminCountsSettingFromUI() {
+  return byId('cfg-admin-counts')?.checked ?? adminCountsForVotes();
 }
 
 function getShareUrl() {
@@ -247,6 +285,7 @@ function applyGameState(gameState = {}) {
   state.votes = gameState.votes ?? state.votes ?? {};
   state.scores = gameState.scores ?? state.scores ?? {};
   state.timerExpired = Boolean(gameState.timerExpired ?? state.timerExpired);
+  state.roundWinnerIds = Array.isArray(gameState.roundWinnerIds) ? gameState.roundWinnerIds.map(String) : (gameState.roundWinnerId ? [String(gameState.roundWinnerId)] : (state.roundWinnerIds || []));
 }
 
 function persistGameState(extra = {}) {
@@ -369,7 +408,17 @@ function injectDynamicUI() {
   }
   if (!byId('result-options-card')) {
     const voteSettingsCard = byId('cfg-private')?.closest('.glass');
-    voteSettingsCard?.insertAdjacentHTML('afterend', `<div id="result-options-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden divide-y divide-white/5"><div class="px-4 py-3.5"><p class="text-sm font-semibold">Resultados</p><p class="text-xs text-zinc-500 mt-0.5">Controla qué se revela al terminar cada votación</p></div><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver todos los resultados</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, solo se revela el más votado</p></div><span class="toggle"><input id="cfg-show-all-results" type="checkbox" checked /><span class="toggle-track"></span></span></label><label id="cfg-red-green-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Rojo / Verde</p><p class="text-xs text-zinc-500 mt-0.5">Rojo si eres el más votado, verde si no</p></div><span class="toggle"><input id="cfg-red-green" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-vote-count-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver número de votos</p><p class="text-xs text-zinc-500 mt-0.5">Solo configurable cuando el voto es secreto</p></div><span class="toggle"><input id="cfg-show-vote-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
+    voteSettingsCard?.insertAdjacentHTML('afterend', `<div id="result-options-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden divide-y divide-white/5"><div class="px-4 py-3.5"><p class="text-sm font-semibold">Resultados</p><p class="text-xs text-zinc-500 mt-0.5">Controla qué se revela al terminar cada votación</p></div><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver todos los resultados</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, solo se revela el más votado</p></div><span class="toggle"><input id="cfg-show-all-results" type="checkbox" checked /><span class="toggle-track"></span></span></label><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ocultar empates</p><p class="text-xs text-zinc-500 mt-0.5">Si hay empate, el juego elige uno al azar para más caos</p></div><span class="toggle"><input id="cfg-hide-ties" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-red-green-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Rojo / Verde</p><p class="text-xs text-zinc-500 mt-0.5">Rojo si eres el más votado, verde si no</p></div><span class="toggle"><input id="cfg-red-green" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-vote-count-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver número de votos</p><p class="text-xs text-zinc-500 mt-0.5">Solo configurable cuando el voto es secreto</p></div><span class="toggle"><input id="cfg-show-vote-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
+  }
+  if (!byId('admin-participation-card')) {
+    byId('result-options-card')?.insertAdjacentHTML('afterend', `<div id="admin-participation-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">El Admin cuenta para votos</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, el admin no puede votar ni recibir votos</p></div><span class="toggle"><input id="cfg-admin-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
+  }
+  if (byId('cfg-admin-counts') && !byId('cfg-admin-counts').dataset.adminCountsBound) {
+    byId('cfg-admin-counts').dataset.adminCountsBound = '1';
+    byId('cfg-admin-counts').addEventListener('input', () => {
+      updateStartButton();
+      renderWaitingPlayers();
+    });
   }
   ['cfg-show-all-results', 'cfg-private'].forEach(id => {
     const input = byId(id);
@@ -586,6 +635,7 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       stopTimer();
       state.votes = data.votes ?? {};
       state.scores = data.scores ?? {};
+      state.roundWinnerIds = Array.isArray(data.roundWinnerIds) ? data.roundWinnerIds.map(String) : (data.roundWinnerId ? [String(data.roundWinnerId)] : []);
       persistGameState();
       _showReveal(data.round, data.question);
       break;
@@ -776,7 +826,7 @@ window.App = {
       btn.disabled = true;
     }
     try {
-      const settings = normalizeSettings({ rounds: 0, infiniteMode: true, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
+      const settings = normalizeSettings({ rounds: 0, infiniteMode: true, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -847,9 +897,11 @@ window.App = {
       if (byId('cfg-rounds-display')) byId('cfg-rounds-display').textContent = '∞';
       byId('cfg-points').checked = s.points;
       byId('cfg-private').checked = s.privateVote;
+      if (byId('cfg-admin-counts')) byId('cfg-admin-counts').checked = s.adminCountsForVotes !== false;
       if (byId('cfg-show-all-results')) byId('cfg-show-all-results').checked = s.showAllResults;
       if (byId('cfg-red-green')) byId('cfg-red-green').checked = s.redGreenMode;
       if (byId('cfg-show-vote-counts')) byId('cfg-show-vote-counts').checked = s.showVoteCounts;
+      if (byId('cfg-hide-ties')) byId('cfg-hide-ties').checked = s.hideTies === true;
       byId('cfg-questions').checked = s.useQuestions;
       byId('cfg-visible').checked = s.questionVisible ?? true;
       if (byId('cfg-round-time')) byId('cfg-round-time').value = String(s.roundTimeLimit ?? 30);
@@ -981,8 +1033,10 @@ window.App = {
 
   async startGame() {
     if (!state.isHost) return;
-    if (state.players.length < 2) {
-      toast('Necesitas al menos 2 jugadores para empezar', '👥');
+    const adminCountsForVotes = byId('cfg-admin-counts')?.checked ?? true;
+    const pendingSettings = normalizeSettings({ ...state.settings, adminCountsForVotes });
+    if (votingPlayers(state.players, pendingSettings).length < 2) {
+      toast('Necesitas al menos 2 jugadores participantes para empezar', '👥');
       updateStartButton();
       return;
     }
@@ -1000,9 +1054,11 @@ window.App = {
       infiniteMode: true,
       points: byId('cfg-points').checked,
       privateVote,
+      adminCountsForVotes,
       showAllResults,
       redGreenMode: !showAllResults && (byId('cfg-red-green')?.checked ?? false),
       showVoteCounts: privateVote ? (byId('cfg-show-vote-counts')?.checked ?? true) : true,
+      hideTies: byId('cfg-hide-ties')?.checked ?? false,
       useQuestions,
       questionVisible: byId('cfg-visible').checked,
       roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
@@ -1038,8 +1094,16 @@ window.App = {
 
   castVote(votedId) {
     if (state.hasVoted || !state.currentQuestion || state.timerExpired) return;
-    state.hasVoted = true;
+    if (!currentUserCanVote()) {
+      toast('El admin no participa en esta partida', '🚫');
+      return;
+    }
     const tid = String(votedId);
+    if (!votingPlayerIds().has(tid) || tid === sid()) {
+      toast('No puedes votar a ese jugador', '🚫');
+      return;
+    }
+    state.hasVoted = true;
     state.votes[sid()] = tid;
     document.querySelectorAll('.vote-card').forEach(c => {
       const selected = c.dataset.id === tid;
@@ -1165,29 +1229,40 @@ function _buildRound(roundNum) {
     const picked = questionList[Math.floor(Math.random() * questionList.length)];
     return { roundNum, question: typeof picked === 'string' ? picked : picked.text, questionCategoryId: picked.categoryId ?? null, questionCategoryName: picked.categoryName ?? null, inventorId: null };
   }
-  return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: state.players[Math.floor(Math.random() * state.players.length)]?.id ?? sid() };
+  const participants = votingPlayers();
+  const inventorPool = participants.length ? participants : state.players;
+  return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: inventorPool[Math.floor(Math.random() * inventorPool.length)]?.id ?? sid() };
 }
 
 function allPlayersVoted() {
-  return state.players.length > 1 && Object.keys(state.votes).length >= state.players.length;
+  const participants = votingPlayers();
+  if (participants.length < 2) return false;
+  return new Set(validVoteEntries().map(([voterId]) => String(voterId))).size >= participants.length;
 }
 
 function _doReveal() {
   if (!state.isHost) return;
   stopTimer(false);
   const voteCounts = {};
-  state.players.forEach(p => { voteCounts[p.id] = 0; });
-  Object.values(state.votes).forEach(vid => { voteCounts[String(vid)] = (voteCounts[String(vid)] || 0) + 1; });
-  if (state.settings.points) {
-    const maxVotes = Math.max(...Object.values(voteCounts), 0);
-    if (maxVotes > 0) {
-      const top = Object.keys(voteCounts).filter(id => voteCounts[id] === maxVotes);
-      Object.entries(state.votes).forEach(([voterId, votedId]) => {
-        if (top.includes(String(votedId))) state.scores[String(voterId)] = (state.scores[String(voterId)] || 0) + 1;
-      });
-    }
+  const participants = votingPlayers();
+  participants.forEach(p => { voteCounts[p.id] = 0; });
+  const entries = validVoteEntries();
+  entries.forEach(([, votedId]) => { voteCounts[String(votedId)] = (voteCounts[String(votedId)] || 0) + 1; });
+  state.votes = Object.fromEntries(entries);
+
+  const maxVotes = Math.max(...Object.values(voteCounts), 0);
+  let winnerIds = maxVotes > 0 ? Object.keys(voteCounts).filter(id => voteCounts[id] === maxVotes) : [];
+  if (hideTies() && winnerIds.length > 1) {
+    winnerIds = [winnerIds[Math.floor(Math.random() * winnerIds.length)]];
   }
-  emit({ type: 'round_reveal', round: state.currentRound, question: state.currentQuestion, votes: state.votes, scores: state.scores });
+  state.roundWinnerIds = winnerIds.map(String);
+
+  if (state.settings.points && winnerIds.length) {
+    entries.forEach(([voterId, votedId]) => {
+      if (winnerIds.includes(String(votedId))) state.scores[String(voterId)] = (state.scores[String(voterId)] || 0) + 1;
+    });
+  }
+  emit({ type: 'round_reveal', round: state.currentRound, question: state.currentQuestion, votes: state.votes, scores: state.scores, roundWinnerIds: state.roundWinnerIds });
   _showReveal(state.currentRound, state.currentQuestion);
 }
 
@@ -1225,7 +1300,7 @@ function startTimer(seconds, { fromHost = false } = {}) {
       state.timerExpired = true;
       if (state.isHost) {
         emit({ type: 'round_timeout', round: state.currentRound });
-        if (Object.keys(state.votes).length === 0) toast('Ronda sin votos. Pasando a resultados.', '⏱️');
+        if (validVoteEntries().length === 0) toast('Ronda sin votos. Pasando a resultados.', '⏱️');
         _doReveal();
       } else if (!fromHost) {
         renderVoteStatus();
@@ -1286,11 +1361,14 @@ function updateStartButton() {
   const btn = byId('admin-start')?.querySelector('button');
   if (!btn) return;
   const categoryOk = !(byId('cfg-questions')?.checked) || App.getSelectedQuestionCategories?.().length > 0;
-  const canStart = state.players.length >= 2 && categoryOk;
+  const pendingSettings = normalizeSettings({ ...state.settings, adminCountsForVotes: getAdminCountsSettingFromUI() });
+  const participantCount = votingPlayers(state.players, pendingSettings).length;
+  const playersOk = participantCount >= 2;
+  const canStart = playersOk && categoryOk;
   btn.disabled = !canStart;
   btn.classList.toggle('opacity-50', !canStart);
   btn.classList.toggle('cursor-not-allowed', !canStart);
-  btn.textContent = state.players.length < 2 ? 'Esperando más jugadores' : (categoryOk ? '¡Comenzar partida! 🚀' : 'Elige una categoría');
+  btn.textContent = !playersOk ? 'Esperando más jugadores participantes' : (categoryOk ? '¡Comenzar partida! 🚀' : 'Elige una categoría');
 }
 
 function renderWaitingPlayers() {
@@ -1299,7 +1377,9 @@ function renderWaitingPlayers() {
   byId('waiting-count').textContent = state.players.length;
   c.innerHTML = state.players.map((p, i) => {
     const username = escapeHTML(p.username);
-    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${p.id === state.hostId ? '<span class="text-xs bg-brand/20 text-brand-light px-2.5 py-0.5 rounded-full font-bold">Host</span>' : ''}</div>`;
+    const hostBadge = p.id === state.hostId ? '<span class="text-xs bg-brand/20 text-brand-light px-2.5 py-0.5 rounded-full font-bold">Host</span>' : '';
+    const adminOutBadge = p.id === state.hostId && getAdminCountsSettingFromUI() === false ? '<span class="text-xs bg-red-500/15 text-red-200 px-2.5 py-0.5 rounded-full font-bold">No juega</span>' : '';
+    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}</div>`;
   }).join('');
   updateStartButton();
 }
@@ -1311,6 +1391,7 @@ function _startRound({ roundNum, question, inventorId }) {
   state.currentQuestion = question ? String(question) : null;
   state.currentInventorId = inventorId ? String(inventorId) : null;
   state.votes = {};
+  state.roundWinnerIds = [];
   state.hasVoted = false;
   state.timerExpired = false;
   byId('game-round').textContent = roundNum;
@@ -1357,7 +1438,8 @@ function renderScoresHeader() {
   const header = byId('game-scores-header');
   if (!header) return;
   if (!state.settings.points) return void (header.innerHTML = '');
-  header.innerHTML = state.players.map(p => `<div class="flex flex-col items-center min-w-0 px-1"><span class="text-[10px] text-zinc-500 truncate max-w-[3.5rem]">${escapeHTML(p.username.slice(0, 6))}</span><span class="font-black text-brand-light text-sm leading-tight">${state.scores[p.id] || 0}</span></div>`).join('');
+  const shownPlayers = votingPlayers();
+  header.innerHTML = shownPlayers.map(p => `<div class="flex flex-col items-center min-w-0 px-1"><span class="text-[10px] text-zinc-500 truncate max-w-[3.5rem]">${escapeHTML(p.username.slice(0, 6))}</span><span class="font-black text-brand-light text-sm leading-tight">${state.scores[p.id] || 0}</span></div>`).join('');
 }
 
 function renderVoteGrid() {
@@ -1365,8 +1447,10 @@ function renderVoteGrid() {
   if (!grid) return;
   if (!state.currentQuestion) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">La votación se activará cuando haya una pregunta.</p>');
   if (state.timerExpired) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Tiempo agotado. Esperando resultados...</p>');
-  const votable = state.players.filter(p => p.id !== sid());
-  grid.innerHTML = votable.length ? votable.map((p, i) => `<button class="vote-card rounded-2xl p-5 flex flex-col items-center gap-3 pop" data-id="${escapeHTML(p.id)}" style="animation-delay:${i * .06}s"><div class="w-14 h-14 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-2xl shadow-lg">${initials(p.username)}</div><span class="font-bold text-sm text-zinc-200">${escapeHTML(p.username)}</span></button>`).join('') : '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Necesitas más jugadores para votar</p>';
+  if (!currentUserCanVote()) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-500 text-sm py-10">Como admin no participas en esta partida: no puedes votar ni recibir votos.</p>');
+  const participants = votingPlayers();
+  const votable = participants.filter(p => p.id !== sid());
+  grid.innerHTML = votable.length ? votable.map((p, i) => `<button class="vote-card rounded-2xl p-5 flex flex-col items-center gap-3 pop" data-id="${escapeHTML(p.id)}" style="animation-delay:${i * .06}s"><div class="w-14 h-14 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-2xl shadow-lg">${initials(p.username)}</div><span class="font-bold text-sm text-zinc-200">${escapeHTML(p.username)}</span></button>`).join('') : '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Necesitas más jugadores participantes para votar</p>';
   grid.querySelectorAll('.vote-card').forEach(button => button.addEventListener('click', () => App.castVote(button.dataset.id)));
 }
 
@@ -1410,9 +1494,10 @@ function renderEpicResultCard(player, voters = [], index = 0, maxVotes = 1, isWi
 function renderVoteStatus() {
   const el = byId('votes-status');
   if (!el) return;
-  const voted = Object.keys(state.votes).length;
-  const total = state.currentQuestion ? state.players.length : 0;
+  const voted = new Set(validVoteEntries().map(([voterId]) => String(voterId))).size;
+  const total = state.currentQuestion ? votingPlayers().length : 0;
   if (!state.currentQuestion) el.textContent = 'Esperando pregunta para iniciar la votación';
+  else if (total < 2) el.textContent = 'No hay suficientes jugadores participantes para votar';
   else if (state.timerExpired) el.textContent = `Tiempo agotado · ${voted} de ${total} votaron`;
   else el.textContent = `${voted} de ${total} han votado`;
 }
@@ -1425,22 +1510,31 @@ function _showReveal(roundNum, question) {
   qEl.textContent = question || '';
   qEl.classList.toggle('hidden', !question);
 
+  const participants = votingPlayers();
   const voteCounts = {};
-  state.players.forEach(p => { voteCounts[p.id] = []; });
-  Object.entries(state.votes).forEach(([voterId, votedId]) => {
+  participants.forEach(p => { voteCounts[p.id] = []; });
+  validVoteEntries().forEach(([voterId, votedId]) => {
     const key = String(votedId);
-    if (!voteCounts[key]) voteCounts[key] = [];
-    const voter = state.players.find(p => p.id === String(voterId));
+    if (!voteCounts[key]) return;
+    const voter = participants.find(p => p.id === String(voterId));
     voteCounts[key].push(playerLabel(voter));
   });
 
-  const sorted = [...state.players].sort((a, b) => (voteCounts[b.id]?.length || 0) - (voteCounts[a.id]?.length || 0));
-  const maxVotes = Math.max(...sorted.map(p => voteCounts[p.id]?.length || 0), 1);
-  const maxRealVotes = Math.max(...sorted.map(p => voteCounts[p.id]?.length || 0), 0);
-  const winnerIds = maxRealVotes > 0 ? sorted.filter(p => (voteCounts[p.id]?.length || 0) === maxRealVotes).map(p => p.id) : [];
+  const naturalSorted = [...participants].sort((a, b) => (voteCounts[b.id]?.length || 0) - (voteCounts[a.id]?.length || 0));
+  const maxVotes = Math.max(...naturalSorted.map(p => voteCounts[p.id]?.length || 0), 1);
+  const maxRealVotes = Math.max(...naturalSorted.map(p => voteCounts[p.id]?.length || 0), 0);
+  const naturalWinnerIds = maxRealVotes > 0 ? naturalSorted.filter(p => (voteCounts[p.id]?.length || 0) === maxRealVotes).map(p => p.id) : [];
+  const winnerIds = hideTies() && state.roundWinnerIds?.length ? state.roundWinnerIds : naturalWinnerIds;
+  const sorted = hideTies() && winnerIds.length
+    ? [...naturalSorted].sort((a, b) => (winnerIds.includes(b.id) ? 1 : 0) - (winnerIds.includes(a.id) ? 1 : 0) || (voteCounts[b.id]?.length || 0) - (voteCounts[a.id]?.length || 0))
+    : naturalSorted;
   const winner = sorted.find(p => winnerIds.includes(p.id)) || sorted[0];
   const winnerVoters = winner ? (voteCounts[winner.id] || []) : [];
-  const winnerName = winner ? playerLabel(winner) : '—';
+  const visibleTie = !hideTies() && naturalWinnerIds.length > 1;
+  const winnerNames = visibleTie
+    ? naturalWinnerIds.map(id => participants.find(player => player.id === id)).filter(Boolean).map(playerLabel).join(' · ')
+    : (winner ? playerLabel(winner) : '—');
+  const winnerTitle = visibleTie ? 'HAY EMPATE ENTRE' : 'EL MÁS VOTADO ES';
   const hasVotes = winnerVoters.length > 0;
   const showAllResults = state.settings.showAllResults !== false;
   const showVoteCounts = shouldShowVoteCounts();
@@ -1450,7 +1544,8 @@ function _showReveal(roundNum, question) {
   const redGreenBadge = redGreenMode
     ? `<div class="red-green-badge ${currentPlayerIsWinner ? 'bg-red-500/20 border-red-300/30 text-red-100' : 'bg-emerald-500/20 border-emerald-300/30 text-emerald-100'} border rounded-2xl px-4 py-3"><p class="text-xs font-black uppercase tracking-[0.28em]">${currentPlayerIsWinner ? 'Pantalla roja' : 'Pantalla verde'}</p><p class="text-sm font-bold mt-1">${currentPlayerIsWinner ? 'Eres el más votado de esta ronda' : 'No eres el más votado'}</p></div>`
     : '';
-  const winnerCountHtml = showVoteCounts && hasVotes ? `<p class="text-brand-light font-black text-lg">${winnerVoters.length} voto${winnerVoters.length !== 1 ? 's' : ''}</p>` : '';
+  const tieChaosHtml = hideTies() && naturalWinnerIds.length > 1 && hasVotes ? '<p class="text-xs text-amber-200/80 font-black uppercase tracking-[0.22em] mt-1">Empate oculto · elegido al azar</p>' : '';
+  const winnerCountHtml = showVoteCounts && hasVotes ? `<p class="text-brand-light font-black text-lg">${winnerVoters.length} voto${winnerVoters.length !== 1 ? 's' : ''}</p>${tieChaosHtml}` : tieChaosHtml;
   const resultsEl = byId('reveal-results');
   const adminNext = byId('admin-next');
   const guestWait = byId('guest-next-wait');
@@ -1460,7 +1555,7 @@ function _showReveal(roundNum, question) {
   if (state.isHost) byId('next-round-btn').textContent = 'Siguiente pregunta →';
   byId('admin-force-end')?.classList.toggle('hidden', !state.isHost);
 
-  resultsEl.innerHTML = `<div class="epic-reveal-stage ${redGreenClass} glass rounded-[2rem] p-5 sm:p-7 text-center border border-brand/20 shadow-2xl shadow-brand/10"><div class="epic-reveal-content space-y-5"><p class="text-xs sm:text-sm text-zinc-500 font-black uppercase tracking-[0.32em]">Veredicto de la ronda</p><div id="epic-reveal-line" class="min-h-[9.5rem] flex flex-col items-center justify-center gap-4"><p class="text-2xl sm:text-3xl font-black text-zinc-100 uppercase leading-tight">EL MÁS VOTADO ES</p><div class="epic-dots flex gap-2 text-brand-light text-4xl font-black" aria-label="Pausa dramática"><span>•</span><span>•</span><span>•</span></div></div>${redGreenBadge}<div id="epic-winner-voters" class="hidden"></div></div></div><div id="epic-other-results" class="space-y-3 mt-4"></div>`;
+  resultsEl.innerHTML = `<div class="epic-reveal-stage ${redGreenClass} glass rounded-[2rem] p-5 sm:p-7 text-center border border-brand/20 shadow-2xl shadow-brand/10"><div class="epic-reveal-content space-y-5"><p class="text-xs sm:text-sm text-zinc-500 font-black uppercase tracking-[0.32em]">Veredicto de la ronda</p><div id="epic-reveal-line" class="min-h-[9.5rem] flex flex-col items-center justify-center gap-4"><p class="text-2xl sm:text-3xl font-black text-zinc-100 uppercase leading-tight">${winnerTitle}</p><div class="epic-dots flex gap-2 text-brand-light text-4xl font-black" aria-label="Pausa dramática"><span>•</span><span>•</span><span>•</span></div></div>${redGreenBadge}<div id="epic-winner-voters" class="hidden"></div></div></div><div id="epic-other-results" class="space-y-3 mt-4"></div>`;
 
   launchConfetti();
   showScreen('reveal');
@@ -1478,7 +1573,7 @@ function _showReveal(roundNum, question) {
       line.innerHTML = `<p class="text-xs text-zinc-500 font-black uppercase tracking-[0.32em]">Resultado</p><p class="epic-winner-name text-4xl sm:text-5xl font-black text-gradient uppercase leading-tight">NADIE HA VOTADO</p><p class="text-sm text-zinc-500 max-w-xs mx-auto">La ronda queda sin ganador claro.</p>`;
       return;
     }
-    line.innerHTML = `<div class="epic-crown text-6xl">👑</div><p class="text-xs text-zinc-500 font-black uppercase tracking-[0.32em]">EL MÁS VOTADO ES</p><h2 class="epic-winner-name text-5xl sm:text-6xl font-black text-gradient uppercase leading-none break-words">${escapeHTML(winnerName)}</h2>${winnerCountHtml}`;
+    line.innerHTML = `<div class="epic-crown text-6xl">${visibleTie ? '⚔️' : '👑'}</div><p class="text-xs text-zinc-500 font-black uppercase tracking-[0.32em]">${winnerTitle}</p><h2 class="epic-winner-name text-5xl sm:text-6xl font-black text-gradient uppercase leading-none break-words">${escapeHTML(winnerNames)}</h2>${winnerCountHtml}`;
   });
 
   if (!state.settings.privateVote && hasVotes) {
