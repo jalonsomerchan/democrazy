@@ -1,6 +1,6 @@
 # Democrazy
 
-Party game web multijugador donde aparece una pregunta, todos votan a qué jugador le pega más y se revelan resultados por ronda. La partida usa preguntas infinitas y solo termina cuando el administrador pulsa **Fin del juego**.
+Party game web multijugador donde aparece una pregunta, todos votan a qué jugador le pega más y se revelan resultados por ronda. Por defecto la partida tiene un número definido de preguntas, y el administrador puede activar el modo de preguntas infinitas si quiere jugar hasta cerrar la sala manualmente.
 
 ## Stack técnico
 
@@ -53,7 +53,7 @@ Incluye:
 - cambio de sala al iniciar nueva partida,
 - renderizado de preguntas, categorías, votos y resultados,
 - opciones avanzadas de resultados: ganador único, ocultar empates, rojo/verde y ocultación de recuentos,
-- modo de preguntas infinitas,
+- modo opcional de preguntas infinitas,
 - cierre de sala para todos al pulsar **Fin del juego**.
 
 ### `js/questions.js`
@@ -78,8 +78,8 @@ Evita abrir con `file://`.
 
 ```js
 {
-  rounds: 0,
-  infiniteMode: true,
+  rounds: 5,
+  infiniteMode: false,
   points: true,
   privateVote: false,
   adminCountsForVotes: true,
@@ -96,8 +96,8 @@ Evita abrir con `file://`.
 
 | Opción | Descripción |
 |---|---|
-| `rounds` | `0` en modo infinito; se mantiene por compatibilidad |
-| `infiniteMode` | La partida no termina sola; el admin debe pulsar **Fin del juego** |
+| `rounds` | Número de preguntas si `infiniteMode` está desactivado |
+| `infiniteMode` | Si está activo, la partida no termina sola; el admin debe pulsar **Fin del juego** |
 | `points` | Activa/desactiva puntuación |
 | `privateVote` | Oculta quién votó a quién |
 | `adminCountsForVotes` | Si está activo el admin puede votar y recibir votos; si no, queda fuera de la votación |
@@ -120,7 +120,7 @@ Evita abrir con `file://`.
 - La reconexión restaura jugadores, settings, ronda, pregunta, votos y puntuaciones desde `game_state`.
 - Las preguntas están agrupadas por categorías seleccionables por el host antes de empezar.
 - El host puede elegir si se muestran todos los resultados, solo el ganador, ocultar empates con ganador aleatorio, modo rojo/verde, recuento de votos y si el admin participa en la votación.
-- La partida avanza indefinidamente hasta que el administrador cierra la sala.
+- Por defecto se juega con un número de preguntas configurable; si se activa **Preguntas infinitas**, la partida avanza indefinidamente.
 - Al pulsar **Fin del juego**, todos los jugadores salen de la sala y se borra la sesión activa.
 - La etiqueta de host usa `hostId`, no la posición del jugador en el array.
 - El cliente API soporta respuestas vacías o no JSON sin romper el flujo de error.

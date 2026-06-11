@@ -13,7 +13,7 @@ const state = {
   players: [],
   settings: {
     rounds: 5,
-    infiniteMode: true,
+    infiniteMode: false,
     points: true,
     privateVote: false,
     adminCountsForVotes: true,
@@ -175,7 +175,7 @@ function normalizeSettings(settings = {}) {
   const showAllResults = Boolean(settings.showAllResults ?? settings.viewAllResults ?? true);
   return {
     rounds: Number(settings.rounds ?? 5),
-    infiniteMode: settings.infiniteMode ?? true,
+    infiniteMode: Boolean(settings.infiniteMode ?? false),
     points: settings.points ?? true,
     privateVote,
     adminCountsForVotes: settings.adminCountsForVotes ?? settings.adminParticipates ?? true,
@@ -399,9 +399,12 @@ function injectDynamicUI() {
     document.body.insertAdjacentHTML('beforeend', `<div id="share-modal" class="hidden fixed inset-0 z-[80] px-4 py-6 flex items-center justify-center"><button type="button" class="absolute inset-0 bg-black/75 backdrop-blur-sm" onclick="App.closeShareModal()" aria-label="Cerrar compartir"></button><div class="relative w-full max-w-sm glass rounded-[2rem] border border-white/10 shadow-2xl p-5 pop"><div class="flex items-start justify-between gap-3 mb-4"><div><p class="text-xs text-zinc-500 font-bold uppercase tracking-widest">Compartir sala</p><h2 class="text-2xl font-black text-gradient tracking-tight">Código <span id="share-room-code">—</span></h2></div><button type="button" onclick="App.closeShareModal()" class="w-10 h-10 rounded-2xl bg-zinc-800 hover:bg-zinc-700 transition flex items-center justify-center text-zinc-300 text-xl" aria-label="Cerrar">×</button></div><div class="bg-white p-3 rounded-[1.5rem] w-fit mx-auto shadow-xl" id="share-modal-qr"></div><p class="text-center text-xs text-zinc-500 mt-3 mb-4">Escanea el QR o comparte el enlace con el móvil.</p><label class="block text-xs text-zinc-500 font-bold uppercase tracking-wider mb-2" for="share-link-input">Enlace de invitación</label><div class="flex gap-2"><input id="share-link-input" readonly class="min-w-0 flex-1 bg-zinc-900/80 border border-zinc-700/70 rounded-2xl px-3 py-3 text-xs text-zinc-300 outline-none" value="" /><button type="button" onclick="App.copyShareLink()" class="bg-zinc-800 hover:bg-zinc-700 px-4 rounded-2xl font-bold text-sm transition">Copiar</button></div><button type="button" id="native-share-button" onclick="App.shareViaWebShare()" class="btn-brand mt-3 w-full py-3.5 rounded-2xl font-bold text-sm shadow-lg shadow-brand/20">Compartir con el móvil</button></div></div>`);
   }
   const roundsCard = byId('cfg-rounds')?.closest('.glass');
-  if (roundsCard && !roundsCard.dataset.infiniteModeNotice) {
-    roundsCard.dataset.infiniteModeNotice = '1';
-    roundsCard.innerHTML = `<div class="px-4 py-3.5"><div class="flex items-center justify-between gap-3"><div><p class="text-sm font-semibold">Preguntas infinitas</p><p class="text-xs text-zinc-500 mt-0.5">La partida sigue hasta que el admin pulse Fin del juego</p></div><span class="text-2xl font-black text-gradient">∞</span></div></div>`;
+  if (roundsCard && !byId('infinite-mode-card')) {
+    roundsCard.insertAdjacentHTML('beforebegin', `<div id="infinite-mode-card" class="mx-4 mb-2 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Preguntas infinitas</p><p class="text-xs text-zinc-500 mt-0.5">Si se activa, la partida sigue hasta que el admin pulse Fin del juego</p></div><span class="toggle"><input id="cfg-infinite-mode" type="checkbox" /><span class="toggle-track"></span></span></label></div>`);
+  }
+  if (byId('cfg-infinite-mode') && !byId('cfg-infinite-mode').dataset.infiniteModeBound) {
+    byId('cfg-infinite-mode').dataset.infiniteModeBound = '1';
+    byId('cfg-infinite-mode').addEventListener('input', () => App.updateInfiniteMode?.());
   }
   if (!byId('cfg-round-time')) {
     roundsCard?.insertAdjacentHTML('afterend', `<div id="round-time-card" class="mx-4 mb-2 glass rounded-2xl"><div class="flex items-center justify-between gap-3 px-4 py-3.5"><div><p class="text-sm font-semibold">Tiempo por ronda</p><p class="text-xs text-zinc-500 mt-0.5">Evita que la partida se quede bloqueada</p></div><select id="cfg-round-time" class="bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"><option value="0">Sin límite</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></div></div>`);
@@ -826,7 +829,7 @@ window.App = {
       btn.disabled = true;
     }
     try {
-      const settings = normalizeSettings({ rounds: 0, infiniteMode: true, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
+      const settings = normalizeSettings({ rounds: 5, infiniteMode: false, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -893,8 +896,9 @@ window.App = {
     byId('guest-wait').classList.toggle('hidden', state.isHost);
     if (state.isHost) {
       const s = normalizeSettings(state.settings);
-      if (byId('cfg-rounds')) byId('cfg-rounds').value = s.rounds || 0;
-      if (byId('cfg-rounds-display')) byId('cfg-rounds-display').textContent = '∞';
+      if (byId('cfg-rounds')) byId('cfg-rounds').value = s.rounds || 5;
+      if (byId('cfg-rounds-display')) byId('cfg-rounds-display').textContent = s.rounds || 5;
+      if (byId('cfg-infinite-mode')) byId('cfg-infinite-mode').checked = s.infiniteMode === true;
       byId('cfg-points').checked = s.points;
       byId('cfg-private').checked = s.privateVote;
       if (byId('cfg-admin-counts')) byId('cfg-admin-counts').checked = s.adminCountsForVotes !== false;
@@ -908,6 +912,7 @@ window.App = {
       renderQuestionCategorySettings(s.questionCategories);
       App.updateQuestionMode();
       App.updateResultOptionsMode();
+      App.updateInfiniteMode();
       App.updateVisibleHint();
     }
     renderWaitingPlayers();
@@ -988,6 +993,17 @@ window.App = {
     updateStartButton();
   },
 
+  updateInfiniteMode() {
+    const enabled = byId('cfg-infinite-mode')?.checked ?? false;
+    const roundsInput = byId('cfg-rounds');
+    const roundsDisplay = byId('cfg-rounds-display');
+    const roundsCard = roundsInput?.closest('.glass');
+    roundsCard?.classList.toggle('opacity-50', enabled);
+    roundsCard?.classList.toggle('pointer-events-none', enabled);
+    if (roundsInput) roundsInput.disabled = enabled;
+    if (roundsDisplay) roundsDisplay.textContent = enabled ? '∞' : (roundsInput?.value || '5');
+  },
+
   updateResultOptionsMode() {
     const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
     const privateVote = byId('cfg-private')?.checked ?? false;
@@ -1018,6 +1034,7 @@ window.App = {
   },
 
   adjRounds(delta) {
+    if (byId('cfg-infinite-mode')?.checked) return;
     const input = byId('cfg-rounds');
     const display = byId('cfg-rounds-display');
     const val = Math.min(20, Math.max(1, (parseInt(input.value) || 5) + delta));
@@ -1049,9 +1066,11 @@ window.App = {
     }
     const privateVote = byId('cfg-private').checked;
     const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
+    const infiniteMode = byId('cfg-infinite-mode')?.checked ?? false;
+    const rounds = Math.min(50, Math.max(1, parseInt(byId('cfg-rounds')?.value ?? '5', 10) || 5));
     const settings = normalizeSettings({
-      rounds: 0,
-      infiniteMode: true,
+      rounds,
+      infiniteMode,
       points: byId('cfg-points').checked,
       privateVote,
       adminCountsForVotes,
@@ -1122,6 +1141,12 @@ window.App = {
   nextRound() {
     if (!state.isHost) return;
     stopTimer();
+    if (!state.settings.infiniteMode && state.currentRound >= Number(state.settings.rounds || 1)) {
+      emit({ type: 'game_over', scores: state.scores });
+      persistGameState({ status: 'finished' });
+      _showFinal();
+      return;
+    }
     const round = _buildRound(state.currentRound + 1);
     emit({ type: 'next_round', round });
     _startRound(round);
@@ -1395,10 +1420,10 @@ function _startRound({ roundNum, question, inventorId }) {
   state.hasVoted = false;
   state.timerExpired = false;
   byId('game-round').textContent = roundNum;
-  byId('game-rounds').textContent = '∞';
+  byId('game-rounds').textContent = state.settings.infiniteMode ? '∞' : (state.settings.rounds || 5);
   byId('voted-feedback').classList.add('hidden');
   byId('voted-feedback').textContent = '✓ Voto registrado';
-  byId('round-progress').style.width = `${Math.min(100, ((roundNum - 1) % 10) * 10)}%`;
+  byId('round-progress').style.width = state.settings.infiniteMode ? `${Math.min(100, ((roundNum - 1) % 10) * 10)}%` : `${Math.min(100, ((roundNum - 1) / Math.max(1, state.settings.rounds || 5)) * 100)}%`;
   persistGameState({ status: 'playing' });
   renderQuestionArea();
   renderScoresHeader();
@@ -1552,7 +1577,7 @@ function _showReveal(roundNum, question) {
 
   adminNext?.classList.add('hidden');
   guestWait?.classList.add('hidden');
-  if (state.isHost) byId('next-round-btn').textContent = 'Siguiente pregunta →';
+  if (state.isHost) byId('next-round-btn').textContent = (!state.settings.infiniteMode && state.currentRound >= Number(state.settings.rounds || 1)) ? 'Ver resultados finales →' : 'Siguiente pregunta →';
   byId('admin-force-end')?.classList.toggle('hidden', !state.isHost);
 
   resultsEl.innerHTML = `<div class="epic-reveal-stage ${redGreenClass} glass rounded-[2rem] p-5 sm:p-7 text-center border border-brand/20 shadow-2xl shadow-brand/10"><div class="epic-reveal-content space-y-5"><p class="text-xs sm:text-sm text-zinc-500 font-black uppercase tracking-[0.32em]">Veredicto de la ronda</p><div id="epic-reveal-line" class="min-h-[9.5rem] flex flex-col items-center justify-center gap-4"><p class="text-2xl sm:text-3xl font-black text-zinc-100 uppercase leading-tight">${winnerTitle}</p><div class="epic-dots flex gap-2 text-brand-light text-4xl font-black" aria-label="Pausa dramática"><span>•</span><span>•</span><span>•</span></div></div>${redGreenBadge}<div id="epic-winner-voters" class="hidden"></div></div></div><div id="epic-other-results" class="space-y-3 mt-4"></div>`;
@@ -1610,7 +1635,7 @@ function _showFinal() {
   stopTimer();
   clearRevealAnimationTimers();
   launchConfetti();
-  const sorted = [...state.players].sort((a, b) => (state.scores[b.id] || 0) - (state.scores[a.id] || 0));
+  const sorted = votingPlayers().sort((a, b) => (state.scores[b.id] || 0) - (state.scores[a.id] || 0));
   byId('winner-name').textContent = sorted[0] ? playerLabel(sorted[0]) : '—';
   byId('final-scores').innerHTML = sorted.map((p, i) => `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3.5 pop" style="animation-delay:${i * .08}s"><span class="text-2xl flex-shrink-0">${['🥇', '🥈', '🥉'][i] ?? `${i + 1}.`}</span><div class="w-9 h-9 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-sm shadow-md flex-shrink-0">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${escapeHTML(playerLabel(p))}</span><span class="font-black text-gradient text-lg">${state.scores[p.id] || 0}pts</span></div>`).join('');
   byId('admin-new-game').classList.toggle('hidden', !state.isHost);
