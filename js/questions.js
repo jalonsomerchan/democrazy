@@ -18,5 +18,7 @@ const questions = [
   "¿Quién es el más propenso a irse de la lengua con un secreto?",
   "¿Quién dormiría más horas al día si pudiera?",
   "¿Quién necesita más validación en redes sociales?",
-  "¿Quién seria el más aterrador en modo borracho?",
+  "¿Quién sería el más aterrador en modo borracho?",
 ];
+
+window.questions = questions;

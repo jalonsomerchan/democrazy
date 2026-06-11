@@ -3,7 +3,7 @@
  */
 class GameAPI {
   constructor(baseURL = 'https://alon.one/juegos/api') {
-    this.baseURL = baseURL.replace(/\/$/, ''); // Limpiar slash final si existe
+    this.baseURL = baseURL.replace(/\/$/, '');
   }
 
   /**
@@ -18,17 +18,25 @@ class GameAPI {
       }
     };
 
-    if (data) {
+    if (data !== null && data !== undefined) {
       options.body = JSON.stringify(data);
     }
 
     try {
       const response = await fetch(`${this.baseURL}/${endpoint}`, options);
-      const result = await response.json();
-      
+      const text = await response.text();
+      let result = {};
+
+      try {
+        result = text ? JSON.parse(text) : {};
+      } catch {
+        result = { error: text || `Respuesta no JSON (${response.status})` };
+      }
+
       if (!response.ok) {
         throw new Error(result.error || `Error: ${response.status}`);
       }
+
       return result;
     } catch (error) {
       console.error(`API Error (${method} ${endpoint}):`, error);
@@ -76,14 +84,13 @@ class GameAPI {
     return this._request(`rooms/${roomCode}/join`, 'POST', { user_id: userId });
   }
 
-
   /** Actualiza el estado del juego, status o settings de la sala */
-  async updateRoomState(roomCode, { gameState, status, roomSettings }) {
+  async updateRoomState(roomCode, { gameState, status, roomSettings } = {}) {
     const payload = {};
-    if (gameState) payload.game_state = gameState;
-    if (status) payload.status = status;
-    if (roomSettings) payload.room_settings = roomSettings;
-    
+    if (gameState !== undefined) payload.game_state = gameState;
+    if (status !== undefined) payload.status = status;
+    if (roomSettings !== undefined) payload.room_settings = roomSettings;
+
     return this._request(`rooms/${roomCode}/state`, 'PATCH', payload);
   }
 
@@ -101,5 +108,4 @@ class GameAPI {
   }
 }
 
-// Exportar para uso en módulos o adjuntar al window
-// export default GameAPI;
+window.GameAPI = GameAPI;
