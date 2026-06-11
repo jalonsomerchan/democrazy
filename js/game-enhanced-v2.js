@@ -18,6 +18,7 @@ const state = {
     useQuestions: true,
     questionVisible: true,
     roundTimeLimit: 30,
+    questionCategories: [],
   },
   currentRound: 0,
   currentQuestion: null,
@@ -144,6 +145,23 @@ function upsertPlayer(player) {
   return p;
 }
 
+function getQuestionCategories() {
+  const categories = Array.isArray(window.questionCategories) ? window.questionCategories : [];
+  return categories.filter(category => category?.id && Array.isArray(category.questions));
+}
+
+function getAllQuestionCategoryIds() {
+  return getQuestionCategories().map(category => String(category.id));
+}
+
+function normalizeQuestionCategories(value) {
+  const all = getAllQuestionCategoryIds();
+  if (!all.length) return [];
+  const raw = Array.isArray(value) ? value : (typeof value === 'string' ? value.split(',') : []);
+  const selected = [...new Set(raw.map(String).filter(id => all.includes(id)))];
+  return selected.length ? selected : all;
+}
+
 function normalizeSettings(settings = {}) {
   return {
     rounds: Number(settings.rounds ?? 5),
@@ -152,6 +170,7 @@ function normalizeSettings(settings = {}) {
     useQuestions: settings.useQuestions ?? true,
     questionVisible: settings.questionVisible ?? true,
     roundTimeLimit: Number(settings.roundTimeLimit ?? 30),
+    questionCategories: normalizeQuestionCategories(settings.questionCategories ?? settings.categories ?? settings.questionCategoryIds),
   };
 }
 
@@ -243,6 +262,15 @@ function injectDynamicUI() {
     const roundsCard = byId('cfg-rounds')?.closest('.glass');
     roundsCard?.insertAdjacentHTML('afterend', `<div id="round-time-card" class="mx-4 mb-2 glass rounded-2xl"><div class="flex items-center justify-between gap-3 px-4 py-3.5"><div><p class="text-sm font-semibold">Tiempo por ronda</p><p class="text-xs text-zinc-500 mt-0.5">Evita que la partida se quede bloqueada</p></div><select id="cfg-round-time" class="bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"><option value="0">Sin límite</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></div></div>`);
   }
+  if (!byId('question-categories-card')) {
+    const questionsCard = byId('cfg-questions')?.closest('.glass');
+    questionsCard?.insertAdjacentHTML('afterend', `<div id="question-categories-card" class="mx-4 mb-4 glass rounded-2xl p-4"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-semibold">Categorías de preguntas</p><p class="text-xs text-zinc-500 mt-0.5">Elige qué temas entran en la partida</p></div><span id="question-category-count" class="text-xs bg-brand/20 text-brand-light px-2.5 py-1 rounded-full font-bold whitespace-nowrap">Todas</span></div><div class="flex gap-2 mb-3"><button type="button" onclick="App.selectQuestionCategories(true)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Todas</button><button type="button" onclick="App.selectQuestionCategories(false)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Limpiar</button></div><div id="question-category-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div><p id="question-category-summary" class="text-xs text-zinc-500 mt-3"></p></div>`);
+  }
+  if (byId('cfg-questions') && !byId('cfg-questions').dataset.categoryBound) {
+    byId('cfg-questions').dataset.categoryBound = '1';
+    byId('cfg-questions').addEventListener('input', () => App.updateQuestionMode?.());
+  }
+
   if (!byId('round-timer-box')) {
     const progress = byId('round-progress')?.parentElement;
     progress?.insertAdjacentHTML('afterend', `<div id="round-timer-box" class="hidden px-5 py-2 border-b border-white/5 bg-zinc-950/60"><div class="flex items-center justify-between gap-3 text-xs"><span class="text-zinc-500 font-bold uppercase tracking-wider">Tiempo</span><span id="round-timer-label" class="font-black text-brand-light">—</span></div><div class="mt-2 h-1.5 bg-zinc-800 rounded-full overflow-hidden"><div id="round-timer-bar" class="h-full bg-gradient-to-r from-brand to-violet-400 transition-all duration-300" style="width:100%"></div></div></div>`);
@@ -250,7 +278,7 @@ function injectDynamicUI() {
   if (!byId('democrazy-enhanced-style')) {
     const style = document.createElement('style');
     style.id = 'democrazy-enhanced-style';
-    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}@media(max-width:640px){:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
+    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}@media(max-width:640px){:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
     document.head.appendChild(style);
   }
 }
@@ -585,7 +613,7 @@ window.App = {
     btn.textContent = 'Creando...';
     btn.disabled = true;
     try {
-      const settings = normalizeSettings({ rounds: 5, points: true, privateVote: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30 });
+      const settings = normalizeSettings({ rounds: 5, points: true, privateVote: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -647,6 +675,8 @@ window.App = {
       byId('cfg-questions').checked = s.useQuestions;
       byId('cfg-visible').checked = s.questionVisible ?? true;
       if (byId('cfg-round-time')) byId('cfg-round-time').value = String(s.roundTimeLimit ?? 30);
+      renderQuestionCategorySettings(s.questionCategories);
+      App.updateQuestionMode();
       App.updateVisibleHint();
     }
     renderWaitingPlayers();
@@ -700,6 +730,41 @@ window.App = {
     } catch {}
   },
 
+  getSelectedQuestionCategories() {
+    return [...document.querySelectorAll('.question-category-checkbox:checked')].map(input => input.value);
+  },
+
+  selectQuestionCategories(selectAll = true) {
+    document.querySelectorAll('.question-category-checkbox').forEach(input => { input.checked = Boolean(selectAll); });
+    App.updateCategorySummary();
+  },
+
+  updateCategorySummary() {
+    const categories = getQuestionCategories();
+    const selected = App.getSelectedQuestionCategories();
+    const summary = byId('question-category-summary');
+    const count = byId('question-category-count');
+    if (summary) {
+      if (!categories.length) summary.textContent = 'No hay categorías cargadas.';
+      else if (!selected.length) summary.textContent = 'Marca al menos una categoría para usar preguntas predefinidas.';
+      else if (selected.length === categories.length) summary.textContent = `${categories.length} categorías activas · ${window.questions?.length ?? 0} preguntas disponibles.`;
+      else {
+        const totalQuestions = categories.filter(category => selected.includes(String(category.id))).reduce((acc, category) => acc + category.questions.length, 0);
+        summary.textContent = `${selected.length} de ${categories.length} categorías activas · ${totalQuestions} preguntas disponibles.`;
+      }
+    }
+    if (count) count.textContent = !selected.length ? '0' : (selected.length === categories.length ? 'Todas' : String(selected.length));
+    updateStartButton();
+  },
+
+  updateQuestionMode() {
+    const enabled = byId('cfg-questions')?.checked ?? true;
+    const card = byId('question-categories-card');
+    card?.classList.toggle('opacity-50', !enabled);
+    card?.classList.toggle('pointer-events-none', !enabled);
+    App.updateCategorySummary();
+  },
+
   adjRounds(delta) {
     const input = byId('cfg-rounds');
     const display = byId('cfg-rounds-display');
@@ -721,13 +786,21 @@ window.App = {
       updateStartButton();
       return;
     }
+    const useQuestions = byId('cfg-questions').checked;
+    const selectedCategories = App.getSelectedQuestionCategories();
+    if (useQuestions && !selectedCategories.length) {
+      toast('Selecciona al menos una categoría', '🏷️');
+      App.updateCategorySummary();
+      return;
+    }
     const settings = normalizeSettings({
       rounds: parseInt(byId('cfg-rounds').value) || 5,
       points: byId('cfg-points').checked,
       privateVote: byId('cfg-private').checked,
-      useQuestions: byId('cfg-questions').checked,
+      useQuestions,
       questionVisible: byId('cfg-visible').checked,
       roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
+      questionCategories: selectedCategories,
     });
     state.settings = settings;
     state.scores = {};
@@ -843,12 +916,23 @@ function animateVoteCard(card) {
   setTimeout(() => ripple.remove(), 600);
 }
 
+function getQuestionPoolForSettings(settings = state.settings) {
+  const categories = getQuestionCategories();
+  if (!categories.length) return (window.questions || []).map(question => typeof question === 'string' ? question : question.text).filter(Boolean);
+  const selected = new Set(normalizeQuestionCategories(settings.questionCategories));
+  const pool = categories
+    .filter(category => selected.has(String(category.id)))
+    .flatMap(category => category.questions.map(text => ({ text, categoryId: category.id, categoryName: category.name })));
+  return pool.length ? pool : categories.flatMap(category => category.questions.map(text => ({ text, categoryId: category.id, categoryName: category.name })));
+}
+
 function _buildRound(roundNum) {
-  const questionList = window.questions || [];
+  const questionList = getQuestionPoolForSettings();
   if (state.settings.useQuestions && questionList.length) {
-    return { roundNum, question: questionList[Math.floor(Math.random() * questionList.length)], inventorId: null };
+    const picked = questionList[Math.floor(Math.random() * questionList.length)];
+    return { roundNum, question: typeof picked === 'string' ? picked : picked.text, questionCategoryId: picked.categoryId ?? null, questionCategoryName: picked.categoryName ?? null, inventorId: null };
   }
-  return { roundNum, question: null, inventorId: state.players[Math.floor(Math.random() * state.players.length)]?.id ?? sid() };
+  return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: state.players[Math.floor(Math.random() * state.players.length)]?.id ?? sid() };
 }
 
 function allPlayersVoted() {
@@ -942,14 +1026,38 @@ function renderTimer(remaining) {
   bar.style.width = `${pct}%`;
 }
 
+function renderQuestionCategorySettings(selectedIds = state.settings.questionCategories) {
+  const list = byId('question-category-list');
+  const card = byId('question-categories-card');
+  if (!list || !card) return;
+  const categories = getQuestionCategories();
+  if (!categories.length) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  const selected = new Set(normalizeQuestionCategories(selectedIds));
+  list.innerHTML = categories.map(category => {
+    const id = escapeHTML(category.id);
+    const name = escapeHTML(category.name);
+    const emoji = escapeHTML(category.emoji || '🏷️');
+    const count = category.questions.length;
+    const checked = selected.has(String(category.id)) ? 'checked' : '';
+    return `<label class="question-category-pill rounded-2xl px-3 py-2.5 flex items-center gap-3 cursor-pointer transition"><input type="checkbox" class="question-category-checkbox w-4 h-4 flex-shrink-0" value="${id}" ${checked} /><span class="text-lg flex-shrink-0">${emoji}</span><span class="min-w-0 flex-1"><span class="block text-sm font-bold truncate">${name}</span><span class="block text-[11px] text-zinc-500">${count} preguntas</span></span></label>`;
+  }).join('');
+  list.querySelectorAll('.question-category-checkbox').forEach(input => input.addEventListener('input', App.updateCategorySummary));
+  App.updateQuestionMode?.();
+}
+
 function updateStartButton() {
   const btn = byId('admin-start')?.querySelector('button');
   if (!btn) return;
-  const canStart = state.players.length >= 2;
+  const categoryOk = !(byId('cfg-questions')?.checked) || App.getSelectedQuestionCategories?.().length > 0;
+  const canStart = state.players.length >= 2 && categoryOk;
   btn.disabled = !canStart;
   btn.classList.toggle('opacity-50', !canStart);
   btn.classList.toggle('cursor-not-allowed', !canStart);
-  btn.textContent = canStart ? '¡Comenzar partida! 🚀' : 'Esperando más jugadores';
+  btn.textContent = state.players.length < 2 ? 'Esperando más jugadores' : (categoryOk ? '¡Comenzar partida! 🚀' : 'Elige una categoría');
 }
 
 function renderWaitingPlayers() {

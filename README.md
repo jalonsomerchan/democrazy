@@ -51,11 +51,11 @@ Incluye:
 - temporizador controlado solo por host,
 - validación de mínimo 2 jugadores,
 - cambio de sala al iniciar nueva partida,
-- renderizado de preguntas, votos, resultados y final.
+- renderizado de preguntas, categorías, votos, resultados y final.
 
 ### `js/questions.js`
 
-Banco de preguntas predefinidas. Expone `window.questions` para el módulo principal.
+Banco de preguntas predefinidas agrupadas por categorías. Expone `window.questionCategories` y mantiene `window.questions` como lista plana compatible.
 
 ## Ejecutar en local
 
@@ -80,7 +80,8 @@ Evita abrir con `file://`.
   privateVote: false,
   useQuestions: true,
   questionVisible: true,
-  roundTimeLimit: 30
+  roundTimeLimit: 30,
+  questionCategories: ['fiesta', 'amistad', 'redes']
 }
 ```
 
@@ -92,6 +93,7 @@ Evita abrir con `file://`.
 | `useQuestions` | Usa preguntas predefinidas |
 | `questionVisible` | Permite ocultar la pregunta a invitados |
 | `roundTimeLimit` | Tiempo máximo por ronda en segundos; `0` desactiva el límite |
+| `questionCategories` | Categorías de preguntas incluidas en la partida; por defecto se marcan todas |
 
 ## Correcciones de estabilidad incluidas
 
@@ -101,5 +103,6 @@ Evita abrir con `file://`.
 - El botón de comenzar se bloquea con menos de 2 jugadores.
 - Si falla `itty-sockets`, se usa polling real contra la API en lugar de `BroadcastChannel` local.
 - La reconexión restaura jugadores, settings, ronda, pregunta, votos y puntuaciones desde `game_state`.
+- Las preguntas están agrupadas por categorías seleccionables por el host antes de empezar.
 - La etiqueta de host usa `hostId`, no la posición del jugador en el array.
 - El cliente API soporta respuestas vacías o no JSON sin romper el flujo de error.
