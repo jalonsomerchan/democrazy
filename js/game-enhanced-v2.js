@@ -254,7 +254,93 @@ function getSavedSession() {
   } catch { clearActiveSession(); return null; }
 }
 
+
+function renderHomeShell() {
+  const login = byId('screen-login');
+  if (!login || login.dataset.infiltradoHome === '1') return;
+  login.dataset.infiltradoHome = '1';
+  login.className = 'screen active flex-col items-center justify-center min-h-screen px-5 py-6 gap-7 relative overflow-hidden';
+  login.innerHTML = `
+    <div class="orb w-80 h-80 bg-violet-700/40 -top-16 -left-16" style="animation:orbFloat 7s ease-in-out infinite"></div>
+    <div class="orb w-96 h-96 bg-purple-900/50 -bottom-20 -right-20" style="animation:orbFloat 9s ease-in-out infinite reverse"></div>
+    <div class="orb w-48 h-48 bg-indigo-600/30 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" style="animation:orbFloat 5s ease-in-out infinite 1.5s"></div>
+
+    <div class="relative z-10 text-center pop">
+      <h1 class="text-6xl sm:text-7xl font-black italic tracking-tighter text-gradient drop-shadow-[0_0_18px_rgba(124,58,237,.45)]">DEMOCRAZY</h1>
+      <p class="text-zinc-500 mt-2 font-medium tracking-wide">El juego donde todos votan</p>
+    </div>
+
+    <div id="login-form" class="relative z-10 w-full max-w-sm space-y-4 pop" style="animation-delay:.08s">
+      <input id="input-username" type="text" placeholder="Tu nombre..." maxlength="20" autocomplete="off"
+        class="w-full bg-zinc-900/90 border-2 border-zinc-800 rounded-2xl p-4 text-center text-xl font-black outline-none focus:border-brand focus:ring-4 focus:ring-brand/15 placeholder-zinc-600 transition"
+        onkeydown="if(event.key==='Enter')App.createHomeRoom()" />
+      <p id="login-error" class="text-red-400 text-xs text-center hidden"></p>
+
+      <div id="login-actions" class="grid grid-cols-2 gap-4">
+        <button id="btn-create-init" data-create-room-button type="button" onclick="App.createHomeRoom()" class="btn-brand rounded-2xl p-4 font-black uppercase tracking-widest shadow-xl shadow-brand/20">
+          Crear sala
+        </button>
+        <button id="btn-join-init" type="button" onclick="App.showJoinForm()" class="bg-zinc-800 hover:bg-zinc-700 rounded-2xl p-4 font-black uppercase tracking-widest transition-all">
+          Unirse
+        </button>
+      </div>
+
+      <div id="join-container" class="hidden space-y-4 pt-4 border-t border-zinc-800">
+        <input id="input-room-code" type="text" placeholder="CÓDIGO" maxlength="6" autocomplete="off"
+          class="w-full bg-zinc-900/90 border-2 border-zinc-800 rounded-2xl p-4 text-center text-2xl font-black tracking-[0.45em] uppercase outline-none focus:border-brand focus:ring-4 focus:ring-brand/15 placeholder-zinc-700 placeholder:tracking-widest transition"
+          oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter')App.joinHomeRoom()" />
+        <p id="join-error" class="text-red-400 text-xs text-center hidden"></p>
+        <button id="btn-join-confirm" type="button" onclick="App.joinHomeRoom()" class="btn-brand w-full rounded-2xl p-4 font-black uppercase tracking-widest shadow-xl shadow-brand/20">
+          Entrar a la sala
+        </button>
+        <button id="btn-back-home" type="button" onclick="App.hideJoinForm()" class="w-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 rounded-2xl p-3 text-xs font-black uppercase tracking-widest transition-all">
+          Volver
+        </button>
+      </div>
+
+      <div id="existing-user-card" class="hidden"></div>
+      <div id="new-user-toggle" class="hidden"></div>
+      <div id="new-user-form" class="hidden"></div>
+
+      <button id="home-switch-user" type="button" onclick="App.switchUser()" class="hidden w-full text-xs text-zinc-600 hover:text-zinc-400 transition underline underline-offset-2">
+        Cambiar jugador
+      </button>
+    </div>
+  `;
+}
+
+function setHomeUsername(username = '') {
+  const input = byId('input-username');
+  if (input) input.value = username;
+  byId('home-switch-user')?.classList.toggle('hidden', !username);
+}
+
+function showHomeJoin(roomCode = '') {
+  byId('join-container')?.classList.remove('hidden');
+  byId('login-actions')?.classList.add('hidden');
+  const codeInput = byId('input-room-code');
+  if (codeInput && roomCode) codeInput.value = roomCode.toUpperCase();
+  setTimeout(() => (codeInput || byId('input-username'))?.focus?.(), 40);
+}
+
+function hideHomeJoin() {
+  byId('join-container')?.classList.add('hidden');
+  byId('login-actions')?.classList.remove('hidden');
+  byId('join-error')?.classList.add('hidden');
+  byId('input-room-code') && (byId('input-room-code').value = '');
+}
+
+function showHome({ join = false, roomCode = '', replace = true } = {}) {
+  renderHomeShell();
+  if (state.user?.username) setHomeUsername(state.user.username);
+  if (join) showHomeJoin(roomCode);
+  else hideHomeJoin();
+  if (replace) history.replaceState({ screen: 'login' }, '', join && roomCode ? `?sala=${encodeURIComponent(roomCode)}` : '#/');
+  showScreen('login', true);
+}
+
 function injectDynamicUI() {
+  renderHomeShell();
   if (!byId('share-modal')) {
     document.body.insertAdjacentHTML('beforeend', `<div id="share-modal" class="hidden fixed inset-0 z-[80] px-4 py-6 flex items-center justify-center"><button type="button" class="absolute inset-0 bg-black/75 backdrop-blur-sm" onclick="App.closeShareModal()" aria-label="Cerrar compartir"></button><div class="relative w-full max-w-sm glass rounded-[2rem] border border-white/10 shadow-2xl p-5 pop"><div class="flex items-start justify-between gap-3 mb-4"><div><p class="text-xs text-zinc-500 font-bold uppercase tracking-widest">Compartir sala</p><h2 class="text-2xl font-black text-gradient tracking-tight">Código <span id="share-room-code">—</span></h2></div><button type="button" onclick="App.closeShareModal()" class="w-10 h-10 rounded-2xl bg-zinc-800 hover:bg-zinc-700 transition flex items-center justify-center text-zinc-300 text-xl" aria-label="Cerrar">×</button></div><div class="bg-white p-3 rounded-[1.5rem] w-fit mx-auto shadow-xl" id="share-modal-qr"></div><p class="text-center text-xs text-zinc-500 mt-3 mb-4">Escanea el QR o comparte el enlace con el móvil.</p><label class="block text-xs text-zinc-500 font-bold uppercase tracking-wider mb-2" for="share-link-input">Enlace de invitación</label><div class="flex gap-2"><input id="share-link-input" readonly class="min-w-0 flex-1 bg-zinc-900/80 border border-zinc-700/70 rounded-2xl px-3 py-3 text-xs text-zinc-300 outline-none" value="" /><button type="button" onclick="App.copyShareLink()" class="bg-zinc-800 hover:bg-zinc-700 px-4 rounded-2xl font-bold text-sm transition">Copiar</button></div><button type="button" id="native-share-button" onclick="App.shareViaWebShare()" class="btn-brand mt-3 w-full py-3.5 rounded-2xl font-bold text-sm shadow-lg shadow-brand/20">Compartir con el móvil</button></div></div>`);
   }
@@ -278,7 +364,7 @@ function injectDynamicUI() {
   if (!byId('democrazy-enhanced-style')) {
     const style = document.createElement('style');
     style.id = 'democrazy-enhanced-style';
-    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}@media(max-width:640px){:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
+    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
     document.head.appendChild(style);
   }
 }
@@ -507,16 +593,13 @@ window.App = {
         const u = JSON.parse(saved);
         u.id = String(u.id);
         state.user = u;
-        byId('existing-avatar').textContent = u.username[0].toUpperCase();
-        byId('existing-name').textContent = u.username;
-        byId('existing-user-card').classList.remove('hidden');
-        byId('new-user-toggle').classList.remove('hidden');
-        byId('new-user-form').classList.add('hidden');
+        setHomeUsername(u.username);
       } catch { localStorage.removeItem('democrazy_user'); }
     }
 
     if (code) sessionStorage.setItem('pending_room', code);
-    if (!code && !canRestoreFromRoute) history.replaceState({ screen: 'login' }, '', '#/');
+    if (!code && !canRestoreFromRoute) showHome({ replace: true });
+    if (code && !state.user) showHome({ join: true, roomCode: code, replace: true });
 
     if (state.user && (code || canRestoreFromRoute)) {
       const shouldReconnect = Boolean(savedSession?.roomCode && (!code || savedSession.roomCode === code) && canRestoreFromRoute);
@@ -524,51 +607,76 @@ window.App = {
     }
   },
 
-  useExistingUser() { App._enterLobby(); },
+  useExistingUser() { showHome(); },
 
-  showNewUserForm() {
-    byId('new-user-form').classList.remove('hidden');
-    byId('new-user-toggle').classList.add('hidden');
-    byId('existing-user-card').classList.add('hidden');
-    byId('input-username').focus();
-  },
+  showNewUserForm() { showHome(); byId('input-username')?.focus(); },
 
-  async createUser() {
-    const username = byId('input-username').value.trim();
+  async prepareHomeUser() {
+    const username = byId('input-username')?.value.trim() || '';
     const errEl = byId('login-error');
-    errEl.classList.add('hidden');
+    errEl?.classList.add('hidden');
+    byId('input-username')?.classList.remove('shake');
     if (!username || username.length < 2) {
-      errEl.textContent = 'El nombre debe tener al menos 2 caracteres.';
-      errEl.classList.remove('hidden');
-      byId('input-username').classList.add('shake');
-      setTimeout(() => byId('input-username').classList.remove('shake'), 400);
-      return;
+      if (errEl) {
+        errEl.textContent = 'Pon un nombre de al menos 2 caracteres.';
+        errEl.classList.remove('hidden');
+      }
+      byId('input-username')?.classList.add('shake');
+      setTimeout(() => byId('input-username')?.classList.remove('shake'), 400);
+      return false;
     }
+    if (state.user?.id && state.user.username === username) return true;
     try {
       const res = await api.createUser(username, 'democrazy', '');
       const user = { id: String(res.user_id ?? res.id), username };
       state.user = user;
       localStorage.setItem('democrazy_user', JSON.stringify(user));
-      App._enterLobby();
+      setHomeUsername(username);
+      return true;
     } catch (e) {
-      errEl.textContent = e.message || 'Error al crear usuario.';
-      errEl.classList.remove('hidden');
+      if (errEl) {
+        errEl.textContent = e.message || 'Error al crear jugador.';
+        errEl.classList.remove('hidden');
+      }
+      return false;
     }
+  },
+
+  async createUser() {
+    if (await App.prepareHomeUser()) showHome();
+  },
+
+  async createHomeRoom() {
+    if (await App.prepareHomeUser()) await App.createRoom();
+  },
+
+  async showJoinForm(roomCode = '') {
+    if (!(await App.prepareHomeUser())) return;
+    showHomeJoin(roomCode || sessionStorage.getItem('pending_room') || '');
+  },
+
+  hideJoinForm() {
+    hideHomeJoin();
+    if (!sessionStorage.getItem('pending_room')) history.replaceState({ screen: 'login' }, '', '#/');
+  },
+
+  async joinHomeRoom() {
+    if (!(await App.prepareHomeUser())) return;
+    await App.joinRoom();
   },
 
   switchUser() {
     clearActiveSession();
     localStorage.removeItem('democrazy_user');
+    sessionStorage.removeItem('pending_room');
     state.user = null;
-    byId('existing-user-card').classList.add('hidden');
-    byId('new-user-toggle').classList.add('hidden');
-    byId('new-user-form').classList.remove('hidden');
-    showScreen('login');
+    state.room = null;
+    byId('input-username') && (byId('input-username').value = '');
+    byId('home-switch-user')?.classList.add('hidden');
+    showHome({ replace: true });
   },
 
   async _enterLobby({ restoreSavedRoom = false } = {}) {
-    byId('lobby-username').textContent = state.user.username;
-    showScreen('lobby');
     const pending = sessionStorage.getItem('pending_room');
     const savedRoom = restoreSavedRoom ? getSavedSession() : null;
     if (savedRoom && (!pending || savedRoom.roomCode === pending)) {
@@ -582,6 +690,7 @@ window.App = {
       await App.joinRoom();
       return;
     }
+    showHome({ replace: true });
   },
 
   async reconnectRoom(code) {
@@ -609,9 +718,12 @@ window.App = {
   },
 
   async createRoom() {
-    const btn = byId('screen-lobby').querySelector('.btn-brand');
-    btn.textContent = 'Creando...';
-    btn.disabled = true;
+    const btn = qs('.screen.active [data-create-room-button]') || byId('screen-lobby')?.querySelector('.btn-brand');
+    const previousHTML = btn?.innerHTML;
+    if (btn) {
+      btn.textContent = 'Creando...';
+      btn.disabled = true;
+    }
     try {
       const settings = normalizeSettings({ rounds: 5, points: true, privateVote: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
@@ -628,16 +740,21 @@ window.App = {
       toast('Error al crear sala: ' + (e.message || 'desconocido'), '⚠️');
       console.error(e);
     } finally {
-      btn.innerHTML = '<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4"/></svg> Crear sala';
-      btn.disabled = false;
+      if (btn) {
+        btn.innerHTML = previousHTML || 'Crear sala';
+        btn.disabled = false;
+      }
     }
   },
 
   async joinRoom() {
     const code = byId('input-room-code').value.trim().toUpperCase();
     const errEl = byId('join-error');
-    errEl.classList.add('hidden');
-    if (code.length < 4) return;
+    errEl?.classList.add('hidden');
+    if (code.length < 4) {
+      if (errEl) { errEl.textContent = 'Introduce el código de la sala.'; errEl.classList.remove('hidden'); }
+      return;
+    }
     try {
       await api.joinRoom(code, sid());
       const roomData = await api.getRoom(code);
@@ -653,8 +770,10 @@ window.App = {
       saveActiveSession();
       App._enterWaiting();
     } catch (e) {
-      errEl.textContent = e.message || 'Sala no encontrada.';
-      errEl.classList.remove('hidden');
+      if (errEl) {
+        errEl.textContent = e.message || 'Sala no encontrada.';
+        errEl.classList.remove('hidden');
+      }
       console.error(e);
     }
   },
@@ -899,8 +1018,7 @@ window.App = {
     state.isHost = false;
     state.hostId = null;
     state.players = [];
-    byId('lobby-username').textContent = state.user.username;
-    showScreen('lobby');
+    showHome({ replace: true });
   },
 };
 
