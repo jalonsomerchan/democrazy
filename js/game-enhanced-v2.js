@@ -67,6 +67,7 @@ const state = {
   revealAnimationTimers: [],
   rulesAccepted: {},
   rulesSignature: '',
+  rulesAcceptanceOpen: false,
 };
 
 const sid = () => String(state.user?.id ?? '');
@@ -245,6 +246,7 @@ function getGameState(extra = {}) {
     roundWinnerIds: state.roundWinnerIds,
     rulesAccepted: state.rulesAccepted,
     rulesSignature: state.rulesSignature,
+    rulesAcceptanceOpen: state.rulesAcceptanceOpen,
     screen: currentScreen(),
     latestEvent: extra.latestEvent ?? null,
   };
@@ -365,6 +367,7 @@ function applyGameState(gameState = {}) {
   state.roundWinnerIds = Array.isArray(gameState.roundWinnerIds) ? gameState.roundWinnerIds.map(String) : (gameState.roundWinnerId ? [String(gameState.roundWinnerId)] : (state.roundWinnerIds || []));
   state.rulesAccepted = gameState.rulesAccepted ?? state.rulesAccepted ?? {};
   state.rulesSignature = gameState.rulesSignature ?? state.rulesSignature ?? '';
+  state.rulesAcceptanceOpen = Boolean(gameState.rulesAcceptanceOpen ?? state.rulesAcceptanceOpen ?? false);
 }
 
 function persistGameState(extra = {}) {
@@ -520,38 +523,68 @@ function buildRulesList(settings = state.settings) {
   return rules;
 }
 
+function ruleAcceptancePlayers(settings = state.settings) {
+  return votingPlayers(state.players, settings);
+}
+
+function missingRulesPlayers(settings = state.settings) {
+  const normalized = normalizeSettings(settings);
+  const signature = rulesSignatureFor(normalized);
+  return ruleAcceptancePlayers(normalized).filter(player => state.rulesAccepted?.[String(player.id)] !== signature);
+}
+
 function renderRoomRules(settings = state.settings) {
   const card = byId('room-rules-card');
   if (!card) return;
+  if (!state.rulesAcceptanceOpen) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
   const normalized = normalizeSettings(settings);
-  const signature = rulesSignatureFor(normalized);
-  state.rulesSignature = state.rulesSignature || signature;
+  const signature = state.rulesSignature || rulesSignatureFor(normalized);
+  state.rulesSignature = signature;
+  const requiredPlayers = ruleAcceptancePlayers(normalized);
+  const missing = missingRulesPlayers(normalized);
   const accepted = state.rulesAccepted?.[sid()] === signature;
+  const isRequired = requiredPlayers.some(player => String(player.id) === sid());
   const rules = buildRulesList(normalized);
   byId('room-rules-list') && (byId('room-rules-list').innerHTML = rules.map(rule => `<li>${escapeHTML(rule)}</li>`).join(''));
   const status = byId('room-rules-accept-status');
   if (status) {
-    const playersToAccept = votingPlayers(state.players, normalized);
-    const acceptedCount = playersToAccept.filter(player => state.rulesAccepted?.[player.id] === signature).length;
-    status.textContent = `${acceptedCount}/${playersToAccept.length} jugadores han aceptado`;
+    const acceptedCount = Math.max(0, requiredPlayers.length - missing.length);
+    status.textContent = `${acceptedCount}/${requiredPlayers.length} aceptadas`;
+  }
+  const missingBox = byId('room-rules-missing');
+  if (missingBox) {
+    missingBox.classList.toggle('hidden', missing.length === 0);
+    missingBox.innerHTML = missing.length
+      ? `<p class="text-[11px] font-black uppercase tracking-widest text-amber-200 mb-2">Falta por aceptar</p><div class="flex flex-wrap gap-2">${missing.map(player => `<span class="bg-amber-500/15 text-amber-100 border border-amber-400/20 rounded-full px-3 py-1 text-xs font-bold">${escapeHTML(playerLabel(player))}</span>`).join('')}</div>`
+      : '';
   }
   const btn = byId('room-rules-accept-btn');
   if (btn) {
-    btn.textContent = accepted ? 'Reglas aceptadas ✓' : 'Aceptar reglas';
-    btn.disabled = accepted;
-    btn.classList.toggle('opacity-60', accepted);
+    if (!isRequired) {
+      btn.textContent = 'No participas en la votación';
+      btn.disabled = true;
+      btn.classList.add('opacity-60');
+    } else {
+      btn.textContent = accepted ? 'Reglas aceptadas ✓' : 'Aceptar reglas';
+      btn.disabled = accepted;
+      btn.classList.toggle('opacity-60', accepted);
+    }
   }
 }
 
-function resetRulesAcceptance(settings = state.settings) {
+function resetRulesAcceptance(settings = state.settings, { open = false } = {}) {
   state.rulesAccepted = {};
   state.rulesSignature = rulesSignatureFor(settings);
+  state.rulesAcceptanceOpen = open;
 }
 
 function allRequiredRulesAccepted(settings = state.settings) {
-  const signature = rulesSignatureFor(settings);
-  const required = votingPlayers(state.players, settings);
-  return required.length >= 2 && required.every(player => state.rulesAccepted?.[String(player.id)] === signature);
+  const required = ruleAcceptancePlayers(settings);
+  return required.length > 0 && missingRulesPlayers(settings).length === 0;
 }
 
 function createSettingsGroup(root, id, title, description) {
@@ -696,7 +729,7 @@ function injectDynamicUI() {
   if (!byId('room-rules-card')) {
     const waitingScreen = byId('screen-waiting');
     const playersPanel = waitingScreen?.querySelector(':scope > .flex-1');
-    playersPanel?.insertAdjacentHTML('beforebegin', `<div id="room-rules-card" class="mx-4 mt-4 mb-2 glass rounded-2xl p-4 border border-brand/15"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-black text-brand-light">Reglas de la sala</p><p class="text-xs text-zinc-500 mt-0.5">Todos los participantes deben aceptarlas antes de empezar</p></div><span id="room-rules-accept-status" class="text-[10px] font-black uppercase tracking-widest bg-zinc-900/70 text-zinc-400 px-2.5 py-1 rounded-full">0/0</span></div><ul id="room-rules-list" class="space-y-1.5 text-xs text-zinc-300 list-disc pl-5"></ul><button id="room-rules-accept-btn" type="button" onclick="App.acceptRoomRules()" class="btn-brand mt-4 w-full py-3 rounded-2xl text-sm font-black">Aceptar reglas</button></div>`);
+    playersPanel?.insertAdjacentHTML('beforebegin', `<div id="room-rules-card" class="hidden mx-4 mt-4 mb-2 glass rounded-2xl p-4 border border-brand/15"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-black text-brand-light">Antes de empezar</p><p class="text-xs text-zinc-500 mt-0.5">El admin ha lanzado la partida. Aceptad las reglas para comenzar de verdad.</p></div><span id="room-rules-accept-status" class="text-[10px] font-black uppercase tracking-widest bg-zinc-900/70 text-zinc-400 px-2.5 py-1 rounded-full">0/0</span></div><ul id="room-rules-list" class="space-y-1.5 text-xs text-zinc-300 list-disc pl-5"></ul><div id="room-rules-missing" class="hidden mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3"></div><button id="room-rules-accept-btn" type="button" onclick="App.acceptRoomRules()" class="btn-brand mt-4 w-full py-3 rounded-2xl text-sm font-black">Aceptar reglas</button></div>`);
   }
   if (!byId('admin-participation-card')) {
     byId('result-options-card')?.insertAdjacentHTML('afterend', `<div id="admin-participation-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">El Admin cuenta para votos</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, el admin no puede votar ni recibir votos</p></div><span class="toggle"><input id="cfg-admin-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
@@ -900,17 +933,36 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.settings = normalizeSettings(data.settings ?? state.settings);
       state.rulesSignature = data.rulesSignature || rulesSignatureFor(state.settings);
       state.rulesAccepted = data.rulesAccepted ?? {};
+      state.rulesAcceptanceOpen = Boolean(data.rulesAcceptanceOpen ?? false);
       renderRoomRules(state.settings);
       renderWaitingPlayers();
       updateStartButton();
       break;
+    case 'rules_acceptance_started':
+      state.settings = normalizeSettings(data.settings ?? state.settings);
+      state.players = (data.players ?? state.players).map(normPlayer);
+      state.hostId = String(data.hostId ?? state.hostId ?? '');
+      state.isHost = sid() === state.hostId;
+      state.rulesSignature = data.rulesSignature || rulesSignatureFor(state.settings);
+      state.rulesAccepted = data.rulesAccepted ?? {};
+      state.rulesAcceptanceOpen = true;
+      showScreen('waiting', true);
+      saveActiveSession();
+      renderRoomRules(state.settings);
+      renderWaitingPlayers();
+      updateStartButton();
+      toast('Acepta las reglas para empezar', '📜');
+      break;
     case 'rules_accepted':
       if (data.playerId && data.rulesSignature) {
         state.rulesAccepted = { ...(state.rulesAccepted || {}), [String(data.playerId)]: String(data.rulesSignature) };
-        persistGameState({ status: currentScreen() === 'waiting' ? 'waiting' : 'playing' });
+        persistGameState({ status: 'waiting' });
         renderRoomRules(state.settings);
         renderWaitingPlayers();
         updateStartButton();
+        if (state.isHost && state.rulesAcceptanceOpen && allRequiredRulesAccepted(state.settings)) {
+          App.startGame?.();
+        }
       }
       break;
     case 'game_started':
@@ -921,6 +973,7 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.currentRound = 0;
       state.currentReaderId = null;
       state.currentDirectTargetId = null;
+      state.rulesAcceptanceOpen = false;
       state.scores = {};
       state.players.forEach(p => { state.scores[p.id] = 0; });
       saveActiveSession();
@@ -1425,10 +1478,17 @@ window.App = {
     }
     const settings = App.collectSettingsFromUI?.() || state.settings;
     const signature = rulesSignatureFor(settings);
-    if (signature !== state.rulesSignature) {
-      resetRulesAcceptance(settings);
-      state.settings = settings;
-      emit({ type: 'rules_update', settings, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted });
+    const changed = signature !== state.rulesSignature;
+    state.settings = settings;
+    if (changed) {
+      state.rulesSignature = signature;
+      state.rulesAccepted = {};
+      if (state.rulesAcceptanceOpen) {
+        emit({ type: 'rules_acceptance_started', settings, players: state.players, hostId: state.hostId, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted });
+        toast('Las reglas han cambiado. Hay que aceptarlas otra vez.', '📜');
+      } else {
+        emit({ type: 'rules_update', settings, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted, rulesAcceptanceOpen: false });
+      }
       persistGameState({ status: 'waiting' });
     }
     renderRoomRules(settings);
@@ -1436,16 +1496,22 @@ window.App = {
   },
 
   acceptRoomRules() {
-    if (!state.user) return;
+    if (!state.user || !state.rulesAcceptanceOpen) return;
     const signature = state.rulesSignature || rulesSignatureFor(state.settings);
+    const required = ruleAcceptancePlayers(state.settings).some(player => String(player.id) === sid());
+    if (!required) {
+      toast('No tienes que aceptar: no participas en esta partida', 'ℹ️');
+      return;
+    }
     state.rulesSignature = signature;
     state.rulesAccepted = { ...(state.rulesAccepted || {}), [sid()]: signature };
     emit({ type: 'rules_accepted', playerId: sid(), rulesSignature: signature });
-    persistGameState({ status: currentScreen() === 'waiting' ? 'waiting' : 'playing' });
+    persistGameState({ status: 'waiting' });
     renderRoomRules(state.settings);
     renderWaitingPlayers();
     updateStartButton();
     toast('Reglas aceptadas', '✅');
+    if (state.isHost && allRequiredRulesAccepted(state.settings)) App.startGame?.();
   },
 
   collectSettingsFromUI() {
@@ -1547,22 +1613,29 @@ window.App = {
       return;
     }
     const signature = rulesSignatureFor(settings);
-    if (state.rulesSignature !== signature) {
-      resetRulesAcceptance(settings);
-      state.settings = settings;
+    const mustOpenAcceptance = !state.rulesAcceptanceOpen || state.rulesSignature !== signature;
+    state.settings = settings;
+
+    if (mustOpenAcceptance) {
+      resetRulesAcceptance(settings, { open: true });
       renderRoomRules(settings);
       renderWaitingPlayers();
-      emit({ type: 'rules_update', settings, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted });
-      toast('Las reglas han cambiado. Todos deben aceptarlas.', '📜');
+      updateStartButton();
+      emit({ type: 'rules_acceptance_started', settings, players: state.players, hostId: state.hostId, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted });
+      persistGameState({ status: 'waiting' });
+      toast('Reglas enviadas. Falta que todos acepten.', '📜');
       return;
     }
+
     if (!allRequiredRulesAccepted(settings)) {
       renderRoomRules(settings);
       renderWaitingPlayers();
-      toast('Todos los jugadores participantes deben aceptar las reglas', '📜');
+      const missing = missingRulesPlayers(settings).map(player => playerLabel(player)).join(', ');
+      toast(missing ? `Falta por aceptar: ${missing}` : 'Todos los jugadores participantes deben aceptar las reglas', '📜');
       return;
     }
-    state.settings = settings;
+
+    state.rulesAcceptanceOpen = false;
     state.scores = {};
     state.players.forEach(p => { state.scores[p.id] = 0; });
     state.currentRound = 0;
@@ -1924,12 +1997,16 @@ function updateStartButton() {
   const categoryOk = onlyVoting || pendingSettings.directMode || !pendingSettings.useQuestions || App.getSelectedQuestionCategories?.().length > 0;
   const participantCount = votingPlayers(state.players, pendingSettings).length;
   const playersOk = pendingSettings.directMode ? participantCount >= 3 : participantCount >= 2;
-  const rulesOk = allRequiredRulesAccepted(pendingSettings);
-  const canStart = playersOk && categoryOk && rulesOk;
+  const accepting = state.rulesAcceptanceOpen && state.rulesSignature === rulesSignatureFor(pendingSettings);
+  const missing = accepting ? missingRulesPlayers(pendingSettings) : [];
+  const canStart = playersOk && categoryOk && !accepting;
   btn.disabled = !canStart;
   btn.classList.toggle('opacity-50', !canStart);
   btn.classList.toggle('cursor-not-allowed', !canStart);
-  btn.textContent = !playersOk ? (pendingSettings.directMode ? 'Modo directo necesita 3 participantes' : 'Esperando más jugadores participantes') : (!categoryOk ? 'Elige una categoría' : (rulesOk ? '¡Comenzar partida! 🚀' : 'Esperando aceptar reglas'));
+  if (!playersOk) btn.textContent = pendingSettings.directMode ? 'Modo directo necesita 3 participantes' : 'Esperando más jugadores participantes';
+  else if (!categoryOk) btn.textContent = 'Elige una categoría';
+  else if (accepting) btn.textContent = missing.length ? `Falta aceptar: ${missing.map(player => playerLabel(player)).join(', ')}` : 'Arrancando partida...';
+  else btn.textContent = 'Comenzar partida 🚀';
 }
 
 function renderWaitingPlayers() {
@@ -1942,9 +2019,10 @@ function renderWaitingPlayers() {
     const pendingSettings = state.isHost && App.collectSettingsFromUI ? App.collectSettingsFromUI() : state.settings;
     const adminOutBadge = p.id === state.hostId && pendingSettings.adminCountsForVotes === false ? '<span class="text-xs bg-red-500/15 text-red-200 px-2.5 py-0.5 rounded-full font-bold">No juega</span>' : '';
     const required = votingPlayerIds(state.players, pendingSettings).has(String(p.id));
-    const acceptedRules = state.rulesAccepted?.[p.id] === rulesSignatureFor(pendingSettings);
-    const rulesBadge = required ? (acceptedRules ? '<span class="text-xs bg-emerald-500/15 text-emerald-200 px-2.5 py-0.5 rounded-full font-bold">Aceptado</span>' : '<span class="text-xs bg-amber-500/15 text-amber-200 px-2.5 py-0.5 rounded-full font-bold">Pendiente</span>') : '';
-    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop ${required ? (acceptedRules ? 'room-rules-player-ok' : 'room-rules-player-pending') : ''}" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}${rulesBadge}</div>`;
+    const acceptingRules = state.rulesAcceptanceOpen && state.rulesSignature === rulesSignatureFor(pendingSettings);
+    const acceptedRules = acceptingRules && state.rulesAccepted?.[p.id] === state.rulesSignature;
+    const rulesBadge = acceptingRules && required ? (acceptedRules ? '<span class="text-xs bg-emerald-500/15 text-emerald-200 px-2.5 py-0.5 rounded-full font-bold">Aceptado</span>' : '<span class="text-xs bg-amber-500/15 text-amber-200 px-2.5 py-0.5 rounded-full font-bold">Falta aceptar</span>') : '';
+    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop ${acceptingRules && required ? (acceptedRules ? 'room-rules-player-ok' : 'room-rules-player-pending') : ''}" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}${rulesBadge}</div>`;
   }).join('');
   renderQuestionReaderOptions(byId('cfg-question-reader-id')?.value || state.settings.questionReaderId);
   App.updateReaderMode?.();
