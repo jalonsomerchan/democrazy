@@ -261,7 +261,151 @@
     '¿Quién daría menos importancia a los logros de {player} comparados con los suyos?',
     '¿Quién sería el más rápido en olvidarse de {player} si deja el grupo?',
     '¿Quién se enfadaría más si {player} tiene éxito en algo que él/ella también quería?',
-    '¿Quién sería el más celoso de la atención que recibe {player} en el grupo?'
+    '¿Quién sería el más celoso de la atención que recibe {player} en el grupo?',
+
+    // 💀 De muerte y desaparición
+    '¿Quién sería el principal sospechoso si {player} desapareciera misteriosamente?',
+    '¿Quién asistiría al funeral de {player} con un color que no es el negro?',
+    '¿Quién diría "pues yo ya lo veía venir" en el entierro de {player}?',
+    '¿Quién sería el primero en pelearse por una herencia de {player} aunque no tuviera nada?',
+    '¿Quién escribiría un mensaje de pésame falso y lo copiaría de internet para {player}?',
+    '¿Quién sería el más rápido en ocupar el sitio de {player} en el grupo si faltara?',
+    '¿Quién se quedaría con la mejor pertenencia de {player} después de muerto?',
+    '¿Quién haría un chiste de mal gusto en el velatorio de {player}?',
+    '¿Quién fingiría haber sido el mejor amigo de {player} para salir en las fotos del funeral?',
+    '¿Quién sería el más probable de tener una pesadilla recurrente con el fantasma de {player}?',
+
+    // 🧠 Psicológico macabro
+    '¿Quién sería capaz de fingir su propia muerte para ver cómo reacciona {player}?',
+    '¿Quién llevaría un diario secreto obsesionado con los hábitos de {player}?',
+    '¿Quién coleccionaría algo raro relacionado con {player} sin que él/ella lo supiera?',
+    '¿Quién tendría una foto de {player} en la cartera desde hace años sin explicación?',
+    '¿Quién sería el más probable de soñar que mata a {player} y despertarse tranquilo?',
+    '¿Quién sabría exactamente cómo deshacerse de un cadáver y se lo explicaría a {player} en una cena?',
+    '¿Quién tendría un plan de evacuación que excluye a {player} en caso de apocalipsis?',
+    '¿Quién sería el primero en ofrecer a {player} como sacrificio si hiciera falta?',
+    '¿Quién estudiaría las reacciones de {player} como si fuera una rata de laboratorio?',
+    '¿Quién haría un pacto con alguna entidad oscura a cambio de algo malo para {player}?',
+
+    // 🔪 Traiciones extremas (sin sangriento explícito)
+    '¿Quién vendería la ubicación de {player} por una cantidad ridícula de dinero?',
+    '¿Quién dejaría a {player} atrás en una persecución para salvarse él/ella?',
+    '¿Quién sería capaz de echarle la culpa de un crimen a {player} para librarse?',
+    '¿Quién robaría la identidad de {player} si tuviera la oportunidad?',
+    '¿Quién encerraría a {player} en el sótano "por su bien" y se lo creería?',
+    '¿Quién sería el más rápido en borrar los mensajes con {player} si este se mete en un lío legal?',
+    '¿Quién le tendería una trampa a {player} para que quede como el malo del grupo?',
+    '¿Quién grabaría a escondidas las conversaciones con {player} por si algún día le hacen falta?',
+    '¿Quién se aliaría con el peor enemigo de {player} a sus espaldas?',
+    '¿Quién sería capaz de sabotear un examen o proyecto de {player} para quedar mejor?',
+
+    // 👻 Terror y paranoia
+    '¿Quién sería el más probable de espiar a {player} por la ventana sin mala intención (o sí)?',
+    '¿Quién se disfrazaría de fantasma para asustar a {player} y lo haría demasiado bien?',
+    '¿Quién tendría una muñeca o figura con el pelo de {player} coleccionado?',
+    '¿Quién sería el primero en sugerir que {player} está poseído si actúa raro?',
+    '¿Quién leería el horóscopo de {player} a escondidas para saber si le va a pasar algo malo?',
+    '¿Quién se quedaría mirando fijamente a {player} mientras duerme si tuviera ocasión?',
+    '¿Quién haría un ritual para saber el futuro de {player} sin consentimiento?',
+    '¿Quién crearía un perfil falso para seguir los pasos de {player} en redes sociales?',
+    '¿Quién tendría más pesadillas con {player} convirtiéndose en algo malvado?',
+    '¿Quién sería el primero en acusar a {player} de brujería si las cosas van mal?',
+
+    '¿Quién llevaría la comida favorita de {player} a su tumba "por si acaso"?',
+    '¿Quién contrataría a un actor para que finja ser el fantasma de {player} y gastarle una broma al grupo?',
+    '¿Quién se presentaría al entierro de {player} con un bocadillo porque "los trámites son largos"?',
+    '¿Quién sería capaz de revivir a {player} solo para volverlo a matar de otra forma más divertida?',
+    '¿Quién escribiría el obituario de {player} y lo haría más gracioso que triste?',
+    '¿Quién pondría música de terror en la casa de {player} cuando no esté?',
+    '¿Quién intentaría vender entradas para ver el fantasma de {player} después de muerto?',
+    '¿Quién le dejaría un mensaje en la nevera a {player} diciendo "te veo" sin más contexto?',
+    '¿Quién sería el más probable de hacer una fiesta temática de zombies con {player} sin avisarle?',
+    '¿Quién le regalaría a {player} un testamento ya cumplimentado con su firma falsa?',
+
+    '¿Quién sería el primero en decir que {player} ya no es el mismo después de un viaje?',
+    '¿Quién creería que {player} tiene un sótano lleno de secretos sin pruebas?',
+    '¿Quién investigaría el árbol genealógico de {player} buscando algo turbio?',
+    '¿Quién sería capaz de hacer una ouija para hablar con la versión muerta de {player} estando vivo?',
+    '¿Quién propondría cambiar a {player} por una mascota mejor en un apocalipsis?',
+
+    // 💔 Sobre la ex de {player} en general
+    '¿Quién sería el primero en hacerse amigo de la ex de {player} solo para cotillear?',
+    '¿Quién llevaría mejor quedar en un sitio donde está la ex de {player}?',
+    '¿Quién soltaría un "pues a mí tu ex me cae bien" delante de {player}?',
+    '¿Quién sería el más probable de invitar a la ex de {player} a una fiesta sin avisar?',
+    '¿Quién compararía a la nueva pareja de {player} con su ex delante de todos?',
+    '¿Quién le diría a {player} "tu ex ha mejorado mucho después de dejarte"?',
+    '¿Quién sería el primero en seguir a la ex de {player} en redes sociales?',
+    '¿Quién se pondría del lado de la ex de {player} en una discusión hipotética?',
+    '¿Quién preguntaría en una cena "¿y tu ex cómo está?" sin venir a cuento?',
+    '¿Quién sería el más torpe para evitar mencionar a la ex de {player} y siempre la mencione?',
+
+    // 🔥 Sobre si volverían o no
+    '¿Quién sería el primero en decir que {player} debería volver con su ex?',
+    '¿Quién le diría a {player} "con tu ex estabas mejor" después de una mala racha?',
+    '¿Quién sería el más probable de intentar reconciliar a {player} con su ex a escondidas?',
+    '¿Quién apostaría por cuánto tiempo tardaría {player} en volver con su ex?',
+    '¿Quién le mandaría un mensaje a la ex de {player} para decirle que {player} la/lo extraña?',
+    '¿Quién crearía un perfil falso para que {player} hable con su ex sin saberlo?',
+    '¿Quién sería el más pesado preguntando "¿y si tu ex te pidiera volver, qué harías?"',
+    '¿Quién le recomendaría a {player} que se fije en lo bueno de su ex (y liste cosas)?',
+    '¿Quién le diría a {player} "todos hemos pensado que vuelvas con tu ex, solo que yo lo digo"?',
+    '¿Quién sería el primero en celebrar si {player} vuelve con su ex?',
+
+    // 😈 Sobre liarse con la ex (tensión)
+    '¿Quién sería capaz de liarse con la ex de {player} y contárselo al día siguiente?',
+    '¿Quién sería el primero en coquetear con la ex de {player} en una fiesta?',
+    '¿Quién se haría el encontradizo con la ex de {player} a propósito?',
+    '¿Quién guardaría el número de la ex de {player} "por si acaso"?',
+    '¿Quién sería el más probable de acabar teniendo algo con la ex de {player} sin buscarlo?',
+    '¿Quién le pediría permiso a {player} para ligar con su ex?',
+    '¿Quién sería el más rápido en borrar a la ex de {player} de sus contactos por lealtad?',
+    '¿Quién se inventaría una excusa para quedar a solas con la ex de {player}?',
+    '¿Quién sería el primero en defender a la ex de {player} si alguien habla mal de ella/él?',
+    '¿Quién sentiría más curiosidad por saber cómo es la ex de {player} en la cama?',
+
+    // 🤐 Secretos y mentiras sobre la ex
+    '¿Quién sabría un secreto de la ex de {player} que {player} desconoce?',
+    '¿Quién habría hablado mal de {player} con su ex estando en el grupo?',
+    '¿Quién sería el más probable de ocultarle a {player} que sigue viendo a su ex?',
+    '¿Quién habría guardado una foto de {player} con su ex sin decirle nada?',
+    '¿Quién le contaría a {player} algo horrible de su ex justo antes de una cita importante?',
+    '¿Quién sería el más chismoso preguntando "¿y por qué cortasteis realmente?"',
+    '¿Quién se inventaría un rumor sobre la ex de {player} para ver su reacción?',
+    '¿Quién sabría exactamente qué fue lo que falló en esa relación sin que {player} se lo contara?',
+    '¿Quién habría sido el primero en saber de la ruptura antes que los demás?',
+    '¿Quién usaría información sobre la ex de {player} para ganar una discusión?',
+
+    // 😅 Situaciones incómodas con la ex presente
+    '¿Quién sería el más incomodo si coinciden {player} y su ex en su casa?',
+    '¿Quién haría más comentarios pasivo-agresivos si la ex de {player} está cerca?',
+    '¿Quién sería el primero en sacar el tema de la ex en una conversación normal?',
+    '¿Quién propondría un juego donde salga a relucir la ex de {player}?',
+    '¿Quién fingiría no saber quién es la ex de {player} para no mojarse?',
+    '¿Quién se pondría más nervioso si la ex de {player} empieza a hablar bien de él/ella?',
+    '¿Quién sería el primero en irse de un sitio si aparecen {player} y su ex juntos?',
+    '¿Quién grabaría el momento en que {player} y su ex coinciden "sin querer"?',
+    '¿Quién sería el más likely de organizar una fiesta donde sepan que va a ir la ex de {player}?',
+    '¿Quién tendría un grupo de WhatsApp para hablar de la ex de {player}?',
+
+    // 🎭 Sobre la nueva pareja vs la ex
+    '¿Quién compararía en voz alta a la nueva pareja de {player} con su ex?',
+    '¿Quién le diría a {player} "la nueva pareja te ha mejorado mucho" o "peor que la ex no puede ser"?',
+    '¿Quién sería el primero en decir que la ex de {player} era más atractiva que la nueva pareja?',
+    '¿Quién le preguntaría a la nueva pareja de {player} qué opina de su ex?',
+    '¿Quién intentaría hacer amiga a la nueva pareja de {player} con su ex?',
+    '¿Quién sería el más probable de invitar a la ex y a la nueva pareja al mismo plan?',
+    '¿Quién llevaría peor que a {player} le vaya mejor sentimentalmente después de su ex?',
+    '¿Quién se equivocaría y llamaría a la nueva pareja con el nombre de la ex?',
+    '¿Quién haría una lista de pros y contras entre la ex y la nueva pareja de {player}?',
+    '¿Quién sería el primero en decir "menos mal que dejaste a tu ex" después de ver a la nueva pareja?',
+
+    // 🔮 Final jugoso
+    '¿Quién sería el primero en preguntarle a la ex de {player} si se arrepiente de haberlo dejado?',
+    '¿Quién se ofrecería a ser el "espía" que vigile a la ex de {player}?',
+    '¿Quién sería capaz de escribir un mensaje anónimo a la ex de {player} fingiendo ser {player}?',
+    '¿Quién haría un vídeo recopilatorio de {player} con su ex para una despedida de soltero?',
+    '¿Quién tendría más probabilidades de acabar siendo amigo íntimo de la ex de {player}?'
   ];
 
   window.directQuestionTemplates = [...new Set([...(window.directQuestionTemplates || []), ...directQuestionTemplates])];
