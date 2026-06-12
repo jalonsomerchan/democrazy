@@ -4,6 +4,12 @@ try {
   console.warn('No se pudieron cargar las preguntas extra', error);
 }
 
+try {
+  await import('./direct-questions.js');
+} catch (error) {
+  console.warn('No se pudieron cargar las preguntas directas', error);
+}
+
 const api = new window.GameAPI();
 const GAME_ID = 12;
 const SOCKET_RECONNECT_MS = 1800;
@@ -28,6 +34,7 @@ const state = {
     showVoteCounts: true,
     hideTies: false,
     onlyVoting: false,
+    directMode: false,
     useQuestions: true,
     questionVisible: true,
     questionReaderMode: 'everyone',
@@ -39,6 +46,7 @@ const state = {
   currentQuestion: null,
   currentInventorId: null,
   currentReaderId: null,
+  currentDirectTargetId: null,
   votes: {},
   scores: {},
   roundWinnerIds: [],
@@ -57,6 +65,8 @@ const state = {
   timerExpired: false,
   lastEventId: '',
   revealAnimationTimers: [],
+  rulesAccepted: {},
+  rulesSignature: '',
 };
 
 const sid = () => String(state.user?.id ?? '');
@@ -184,7 +194,8 @@ function normalizeSettings(settings = {}) {
   const privateVote = Boolean(settings.privateVote ?? false);
   const showAllResults = Boolean(settings.showAllResults ?? settings.viewAllResults ?? true);
   const onlyVoting = Boolean(settings.onlyVoting ?? settings.votingOnly ?? false);
-  const useQuestions = onlyVoting ? false : (settings.useQuestions ?? true);
+  const directMode = !onlyVoting && Boolean(settings.directMode ?? settings.directQuestionMode ?? false);
+  const useQuestions = onlyVoting ? false : (directMode ? true : (settings.useQuestions ?? true));
   const questionReaderMode = (!onlyVoting && useQuestions) ? normalizeQuestionReaderMode(settings.questionReaderMode ?? settings.readerMode) : 'everyone';
   const questionReaderId = questionReaderMode === 'single' && settings.questionReaderId != null ? String(settings.questionReaderId) : null;
   return {
@@ -198,6 +209,7 @@ function normalizeSettings(settings = {}) {
     showVoteCounts: privateVote ? Boolean(settings.showVoteCounts ?? settings.viewVoteCount ?? true) : true,
     hideTies: Boolean(settings.hideTies ?? settings.hideTieBreaks ?? false),
     onlyVoting,
+    directMode,
     useQuestions,
     questionVisible: onlyVoting ? false : (settings.questionVisible ?? true),
     questionReaderMode,
@@ -226,10 +238,13 @@ function getGameState(extra = {}) {
     currentQuestion: state.currentQuestion,
     currentInventorId: state.currentInventorId,
     currentReaderId: state.currentReaderId,
+    currentDirectTargetId: state.currentDirectTargetId,
     votes: state.votes,
     scores: state.scores,
     timerExpired: state.timerExpired,
     roundWinnerIds: state.roundWinnerIds,
+    rulesAccepted: state.rulesAccepted,
+    rulesSignature: state.rulesSignature,
     screen: currentScreen(),
     latestEvent: extra.latestEvent ?? null,
   };
@@ -266,6 +281,23 @@ function votingPlayerIds(players = state.players, settings = state.settings) {
   return new Set(votingPlayers(players, settings).map(player => String(player.id)));
 }
 
+function directTargetId(settings = state.settings) {
+  return settings.directMode ? String(state.currentDirectTargetId || '') : '';
+}
+
+function votablePlayers(players = state.players, settings = state.settings) {
+  const targetId = directTargetId(settings);
+  return votingPlayers(players, settings).filter(player => !targetId || String(player.id) !== targetId);
+}
+
+function votablePlayerIds(players = state.players, settings = state.settings) {
+  return new Set(votablePlayers(players, settings).map(player => String(player.id)));
+}
+
+function directTargetById(id = state.currentDirectTargetId) {
+  return state.players.find(player => String(player.id) === String(id));
+}
+
 function normalizeQuestionReaderMode(value) {
   const mode = String(value || 'everyone');
   return ['everyone', 'single', 'random'].includes(mode) ? mode : 'everyone';
@@ -295,8 +327,9 @@ function roundAcceptsVotes() {
 }
 
 function validVoteEntries(votes = state.votes, players = state.players, settings = state.settings) {
-  const ids = votingPlayerIds(players, settings);
-  return Object.entries(votes || {}).filter(([voterId, votedId]) => ids.has(String(voterId)) && ids.has(String(votedId)) && String(voterId) !== String(votedId));
+  const voterIds = votingPlayerIds(players, settings);
+  const candidateIds = votablePlayerIds(players, settings);
+  return Object.entries(votes || {}).filter(([voterId, votedId]) => voterIds.has(String(voterId)) && candidateIds.has(String(votedId)) && String(voterId) !== String(votedId));
 }
 
 function getAdminCountsSettingFromUI() {
@@ -325,10 +358,13 @@ function applyGameState(gameState = {}) {
   state.currentQuestion = gameState.currentQuestion ?? state.currentQuestion;
   state.currentInventorId = gameState.currentInventorId ? String(gameState.currentInventorId) : state.currentInventorId;
   state.currentReaderId = gameState.currentReaderId ? String(gameState.currentReaderId) : state.currentReaderId;
+  state.currentDirectTargetId = gameState.currentDirectTargetId ? String(gameState.currentDirectTargetId) : state.currentDirectTargetId;
   state.votes = gameState.votes ?? state.votes ?? {};
   state.scores = gameState.scores ?? state.scores ?? {};
   state.timerExpired = Boolean(gameState.timerExpired ?? state.timerExpired);
   state.roundWinnerIds = Array.isArray(gameState.roundWinnerIds) ? gameState.roundWinnerIds.map(String) : (gameState.roundWinnerId ? [String(gameState.roundWinnerId)] : (state.roundWinnerIds || []));
+  state.rulesAccepted = gameState.rulesAccepted ?? state.rulesAccepted ?? {};
+  state.rulesSignature = gameState.rulesSignature ?? state.rulesSignature ?? '';
 }
 
 function persistGameState(extra = {}) {
@@ -436,6 +472,88 @@ function showHome({ join = false, roomCode = '', replace = true } = {}) {
   showScreen('login', true);
 }
 
+function rulesSignatureFor(settings = state.settings) {
+  const normalized = normalizeSettings(settings);
+  const relevant = {
+    rounds: normalized.infiniteMode ? 'infinite' : Number(normalized.rounds || 5),
+    infiniteMode: normalized.infiniteMode,
+    points: Boolean(normalized.points),
+    privateVote: Boolean(normalized.privateVote),
+    adminCountsForVotes: normalized.adminCountsForVotes !== false,
+    showAllResults: normalized.showAllResults !== false,
+    redGreenMode: normalized.redGreenMode === true,
+    showVoteCounts: normalized.showVoteCounts !== false,
+    hideTies: normalized.hideTies === true,
+    onlyVoting: normalized.onlyVoting === true,
+    directMode: normalized.directMode === true,
+    useQuestions: normalized.useQuestions === true,
+    questionVisible: normalized.questionVisible === true,
+    questionReaderMode: normalized.questionReaderMode || 'everyone',
+    questionReaderId: normalized.questionReaderMode === 'single' ? normalized.questionReaderId : null,
+    roundTimeLimit: Number(normalized.roundTimeLimit || 0),
+    questionCategories: [...(normalized.questionCategories || [])].sort(),
+  };
+  return btoa(unescape(encodeURIComponent(JSON.stringify(relevant)))).slice(0, 32);
+}
+
+function buildRulesList(settings = state.settings) {
+  const normalized = normalizeSettings(settings);
+  const rules = [];
+  rules.push(normalized.infiniteMode ? 'La partida tiene preguntas infinitas hasta que el admin pulse Fin del juego.' : `La partida tendrá ${Number(normalized.rounds || 5)} pregunta${Number(normalized.rounds || 5) !== 1 ? 's' : ''}.`);
+  rules.push(normalized.roundTimeLimit > 0 ? `Cada ronda tiene ${normalized.roundTimeLimit} segundos para votar.` : 'No hay límite de tiempo por ronda.');
+  if (normalized.onlyVoting) rules.push('Modo Solo votación: no habrá preguntas, se vota directamente.');
+  else if (normalized.directMode) rules.push('Modo directo: cada pregunta nombra a un jugador y no se le puede votar en esa ronda.');
+  else if (normalized.useQuestions) rules.push('Habrá preguntas del juego filtradas por las categorías elegidas.');
+  else rules.push('Un jugador elegido por el juego inventará la pregunta de cada ronda.');
+  if (!normalized.onlyVoting && normalized.useQuestions) {
+    if (normalized.questionReaderMode === 'single') rules.push('Un lector único verá y leerá todas las preguntas.');
+    else if (normalized.questionReaderMode === 'random') rules.push('En cada ronda habrá un lector aleatorio que verá y leerá la pregunta.');
+    else rules.push(normalized.questionVisible ? 'Las preguntas les aparecerán a todos.' : 'Solo el admin verá las preguntas.');
+  }
+  rules.push(normalized.privateVote ? 'Los votos serán secretos.' : 'Los votos serán públicos y se verá quién votó a quién.');
+  rules.push(normalized.points ? 'Habrá puntuación: aciertas si votas al más votado.' : 'No habrá puntuación, solo caos.');
+  if (normalized.adminCountsForVotes === false) rules.push('El admin no participa: no puede votar ni recibir votos.');
+  rules.push(normalized.showAllResults !== false ? 'Se mostrarán todos los resultados de cada ronda.' : 'Solo se mostrará el jugador más votado.');
+  if (normalized.hideTies) rules.push('Si hay empate, el juego ocultará el empate y elegirá a alguien al azar.');
+  if (normalized.redGreenMode) rules.push('Modo Rojo / Verde activo: pantalla roja si eres el más votado, verde si te libras.');
+  if (normalized.privateVote && normalized.showVoteCounts === false) rules.push('El número de votos estará oculto.');
+  return rules;
+}
+
+function renderRoomRules(settings = state.settings) {
+  const card = byId('room-rules-card');
+  if (!card) return;
+  const normalized = normalizeSettings(settings);
+  const signature = rulesSignatureFor(normalized);
+  state.rulesSignature = state.rulesSignature || signature;
+  const accepted = state.rulesAccepted?.[sid()] === signature;
+  const rules = buildRulesList(normalized);
+  byId('room-rules-list') && (byId('room-rules-list').innerHTML = rules.map(rule => `<li>${escapeHTML(rule)}</li>`).join(''));
+  const status = byId('room-rules-accept-status');
+  if (status) {
+    const playersToAccept = votingPlayers(state.players, normalized);
+    const acceptedCount = playersToAccept.filter(player => state.rulesAccepted?.[player.id] === signature).length;
+    status.textContent = `${acceptedCount}/${playersToAccept.length} jugadores han aceptado`;
+  }
+  const btn = byId('room-rules-accept-btn');
+  if (btn) {
+    btn.textContent = accepted ? 'Reglas aceptadas ✓' : 'Aceptar reglas';
+    btn.disabled = accepted;
+    btn.classList.toggle('opacity-60', accepted);
+  }
+}
+
+function resetRulesAcceptance(settings = state.settings) {
+  state.rulesAccepted = {};
+  state.rulesSignature = rulesSignatureFor(settings);
+}
+
+function allRequiredRulesAccepted(settings = state.settings) {
+  const signature = rulesSignatureFor(settings);
+  const required = votingPlayers(state.players, settings);
+  return required.length >= 2 && required.every(player => state.rulesAccepted?.[String(player.id)] === signature);
+}
+
 function createSettingsGroup(root, id, title, description) {
   let group = byId(id);
   if (!group) {
@@ -499,6 +617,7 @@ function organizeAdminSettingsLayout() {
   moveSettingsCard(byId('round-time-card'), gameGroup);
 
   moveSettingsCard(byId('only-voting-card'), questionGroup);
+  moveSettingsCard(byId('direct-mode-card'), questionGroup);
   moveSettingsCard(detachOptionCard('cfg-questions'), questionGroup);
   moveSettingsCard(byId('question-categories-card'), questionGroup);
   moveSettingsCard(byId('question-reader-card'), questionGroup);
@@ -545,7 +664,15 @@ function injectDynamicUI() {
   }
   if (byId('cfg-only-voting') && !byId('cfg-only-voting').dataset.onlyVotingBound) {
     byId('cfg-only-voting').dataset.onlyVotingBound = '1';
-    byId('cfg-only-voting').addEventListener('input', () => App.updateOnlyVotingMode?.());
+    byId('cfg-only-voting').addEventListener('input', () => { App.updateOnlyVotingMode?.(); App.syncRulesPreview?.(); });
+  }
+  if (!byId('direct-mode-card')) {
+    const questionsCard = byId('cfg-questions')?.closest('.glass');
+    questionsCard?.insertAdjacentHTML('beforebegin', `<div id="direct-mode-card" class="mx-4 mb-2 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Modo directo</p><p class="text-xs text-zinc-500 mt-0.5">Preguntas que nombran a alguien: ese jugador no puede recibir votos</p></div><span class="toggle"><input id="cfg-direct-mode" type="checkbox" /><span class="toggle-track"></span></span></label></div>`);
+  }
+  if (byId('cfg-direct-mode') && !byId('cfg-direct-mode').dataset.directModeBound) {
+    byId('cfg-direct-mode').dataset.directModeBound = '1';
+    byId('cfg-direct-mode').addEventListener('input', () => { App.updateDirectMode?.(); App.syncRulesPreview?.(); });
   }
 
   if (!byId('question-reader-card')) {
@@ -565,6 +692,11 @@ function injectDynamicUI() {
   if (!byId('result-options-card')) {
     const voteSettingsCard = byId('cfg-private')?.closest('.glass');
     voteSettingsCard?.insertAdjacentHTML('afterend', `<div id="result-options-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden divide-y divide-white/5"><div class="px-4 py-3.5"><p class="text-sm font-semibold">Resultados</p><p class="text-xs text-zinc-500 mt-0.5">Controla qué se revela al terminar cada votación</p></div><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver todos los resultados</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, solo se revela el más votado</p></div><span class="toggle"><input id="cfg-show-all-results" type="checkbox" checked /><span class="toggle-track"></span></span></label><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ocultar empates</p><p class="text-xs text-zinc-500 mt-0.5">Si hay empate, el juego elige uno al azar para más caos</p></div><span class="toggle"><input id="cfg-hide-ties" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-red-green-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Rojo / Verde</p><p class="text-xs text-zinc-500 mt-0.5">Rojo si eres el más votado, verde si no</p></div><span class="toggle"><input id="cfg-red-green" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-vote-count-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver número de votos</p><p class="text-xs text-zinc-500 mt-0.5">Solo configurable cuando el voto es secreto</p></div><span class="toggle"><input id="cfg-show-vote-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
+  }
+  if (!byId('room-rules-card')) {
+    const waitingScreen = byId('screen-waiting');
+    const playersPanel = waitingScreen?.querySelector(':scope > .flex-1');
+    playersPanel?.insertAdjacentHTML('beforebegin', `<div id="room-rules-card" class="mx-4 mt-4 mb-2 glass rounded-2xl p-4 border border-brand/15"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-black text-brand-light">Reglas de la sala</p><p class="text-xs text-zinc-500 mt-0.5">Todos los participantes deben aceptarlas antes de empezar</p></div><span id="room-rules-accept-status" class="text-[10px] font-black uppercase tracking-widest bg-zinc-900/70 text-zinc-400 px-2.5 py-1 rounded-full">0/0</span></div><ul id="room-rules-list" class="space-y-1.5 text-xs text-zinc-300 list-disc pl-5"></ul><button id="room-rules-accept-btn" type="button" onclick="App.acceptRoomRules()" class="btn-brand mt-4 w-full py-3 rounded-2xl text-sm font-black">Aceptar reglas</button></div>`);
   }
   if (!byId('admin-participation-card')) {
     byId('result-options-card')?.insertAdjacentHTML('afterend', `<div id="admin-participation-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">El Admin cuenta para votos</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, el admin no puede votar ni recibir votos</p></div><span class="toggle"><input id="cfg-admin-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
@@ -607,10 +739,18 @@ function injectDynamicUI() {
     const progress = byId('round-progress')?.parentElement;
     progress?.insertAdjacentHTML('afterend', `<div id="round-timer-box" class="hidden px-5 py-2 border-b border-white/5 bg-zinc-950/60"><div class="flex items-center justify-between gap-3 text-xs"><span class="text-zinc-500 font-bold uppercase tracking-wider">Tiempo</span><span id="round-timer-label" class="font-black text-brand-light">—</span></div><div class="mt-2 h-1.5 bg-zinc-800 rounded-full overflow-hidden"><div id="round-timer-bar" class="h-full bg-gradient-to-r from-brand to-violet-400 transition-all duration-300" style="width:100%"></div></div></div>`);
   }
+  document.querySelectorAll('#admin-settings input, #admin-settings select').forEach(input => {
+    if (!input.dataset.rulesSyncBound) {
+      input.dataset.rulesSyncBound = '1';
+      input.addEventListener('input', () => App.syncRulesPreview?.());
+      input.addEventListener('change', () => App.syncRulesPreview?.());
+    }
+  });
+
   if (!byId('democrazy-enhanced-style')) {
     const style = document.createElement('style');
     style.id = 'democrazy-enhanced-style';
-    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}.question-reader-option:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}@keyframes epicFlash{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.035)}}@keyframes epicCrownDrop{0%{opacity:0;transform:translateY(-28px) scale(.6) rotate(-10deg)}60%{opacity:1;transform:translateY(4px) scale(1.16) rotate(5deg)}100%{opacity:1;transform:translateY(0) scale(1) rotate(0)}}@keyframes epicNameReveal{0%{opacity:0;filter:blur(16px);letter-spacing:.35em;transform:translateY(18px) scale(.92)}70%{opacity:1;filter:blur(0);letter-spacing:.05em;transform:translateY(-3px) scale(1.04)}100%{opacity:1;filter:blur(0);letter-spacing:.02em;transform:translateY(0) scale(1)}}@keyframes epicCardIn{0%{opacity:0;transform:translateY(22px) scale(.94);filter:blur(10px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}@keyframes epicGlowSweep{0%{transform:translateX(-130%) skewX(-20deg)}100%{transform:translateX(130%) skewX(-20deg)}}.epic-reveal-stage{position:relative;overflow:hidden}.epic-reveal-stage:before{content:'';position:absolute;inset:-40%;background:radial-gradient(circle at 50% 20%,rgba(124,58,237,.32),transparent 34%),radial-gradient(circle at 15% 85%,rgba(245,158,11,.18),transparent 28%);pointer-events:none;animation:epicFlash 2.3s ease-in-out infinite}.epic-reveal-content{position:relative;z-index:1}.epic-winner-name{animation:epicNameReveal .95s cubic-bezier(.18,1.35,.32,1) both;text-shadow:0 0 26px rgba(167,139,250,.55)}.epic-crown{animation:epicCrownDrop .8s cubic-bezier(.18,1.35,.32,1) both}.epic-result-card{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both;position:relative;overflow:hidden}.epic-result-card:after{content:'';position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:epicGlowSweep 1.05s ease-out .15s both;pointer-events:none}.epic-dots span{animation:epicFlash 1s ease-in-out infinite}.epic-dots span:nth-child(2){animation-delay:.15s}.epic-dots span:nth-child(3){animation-delay:.3s}@keyframes redGreenPulse{0%,100%{transform:scale(1);filter:saturate(1)}50%{transform:scale(1.018);filter:saturate(1.25)}}.red-green-red{border-color:rgba(248,113,113,.55)!important;box-shadow:0 0 48px rgba(239,68,68,.24)!important;background:linear-gradient(145deg,rgba(127,29,29,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-green{border-color:rgba(52,211,153,.55)!important;box-shadow:0 0 48px rgba(16,185,129,.24)!important;background:linear-gradient(145deg,rgba(6,78,59,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-badge{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
+    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}.question-reader-option:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}@keyframes epicFlash{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.035)}}@keyframes epicCrownDrop{0%{opacity:0;transform:translateY(-28px) scale(.6) rotate(-10deg)}60%{opacity:1;transform:translateY(4px) scale(1.16) rotate(5deg)}100%{opacity:1;transform:translateY(0) scale(1) rotate(0)}}@keyframes epicNameReveal{0%{opacity:0;filter:blur(16px);letter-spacing:.35em;transform:translateY(18px) scale(.92)}70%{opacity:1;filter:blur(0);letter-spacing:.05em;transform:translateY(-3px) scale(1.04)}100%{opacity:1;filter:blur(0);letter-spacing:.02em;transform:translateY(0) scale(1)}}@keyframes epicCardIn{0%{opacity:0;transform:translateY(22px) scale(.94);filter:blur(10px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}@keyframes epicGlowSweep{0%{transform:translateX(-130%) skewX(-20deg)}100%{transform:translateX(130%) skewX(-20deg)}}.epic-reveal-stage{position:relative;overflow:hidden}.epic-reveal-stage:before{content:'';position:absolute;inset:-40%;background:radial-gradient(circle at 50% 20%,rgba(124,58,237,.32),transparent 34%),radial-gradient(circle at 15% 85%,rgba(245,158,11,.18),transparent 28%);pointer-events:none;animation:epicFlash 2.3s ease-in-out infinite}.epic-reveal-content{position:relative;z-index:1}.epic-winner-name{animation:epicNameReveal .95s cubic-bezier(.18,1.35,.32,1) both;text-shadow:0 0 26px rgba(167,139,250,.55)}.epic-crown{animation:epicCrownDrop .8s cubic-bezier(.18,1.35,.32,1) both}.epic-result-card{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both;position:relative;overflow:hidden}.epic-result-card:after{content:'';position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:epicGlowSweep 1.05s ease-out .15s both;pointer-events:none}.epic-dots span{animation:epicFlash 1s ease-in-out infinite}.epic-dots span:nth-child(2){animation-delay:.15s}.epic-dots span:nth-child(3){animation-delay:.3s}@keyframes redGreenPulse{0%,100%{transform:scale(1);filter:saturate(1)}50%{transform:scale(1.018);filter:saturate(1.25)}}.red-green-red{border-color:rgba(248,113,113,.55)!important;box-shadow:0 0 48px rgba(239,68,68,.24)!important;background:linear-gradient(145deg,rgba(127,29,29,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-green{border-color:rgba(52,211,153,.55)!important;box-shadow:0 0 48px rgba(16,185,129,.24)!important;background:linear-gradient(145deg,rgba(6,78,59,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-badge{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both}.room-rules-player-ok{border-color:rgba(52,211,153,.35)!important;background:rgba(6,78,59,.2)!important}.room-rules-player-pending{border-color:rgba(245,158,11,.22)!important;background:rgba(120,53,15,.16)!important}.direct-target-badge{border:1px solid rgba(248,113,113,.28);background:rgba(127,29,29,.24);color:#fecaca;border-radius:16px;padding:10px 12px;font-size:.8rem;font-weight:900;text-transform:uppercase;letter-spacing:.08em;margin-top:14px}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
     document.head.appendChild(style);
   }
 
@@ -737,6 +877,7 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       const p = upsertPlayer(data.player);
       if (p && state.scores[p.id] == null) state.scores[p.id] = 0;
       renderWaitingPlayers();
+      renderRoomRules(state.settings);
       if (state.isHost && !fromPoll) emit({ type: 'room_update', players: state.players, hostId: state.hostId });
       break;
     }
@@ -745,13 +886,32 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.hostId = String(data.hostId ?? state.hostId ?? '');
       state.isHost = sid() === state.hostId;
       renderWaitingPlayers();
+      renderRoomRules(state.settings);
       renderVoteStatus();
       break;
     case 'player_left':
       state.players = state.players.filter(p => p.id !== String(data.playerId));
       delete state.votes[String(data.playerId)];
       renderWaitingPlayers();
+      renderRoomRules(state.settings);
       renderVoteStatus();
+      break;
+    case 'rules_update':
+      state.settings = normalizeSettings(data.settings ?? state.settings);
+      state.rulesSignature = data.rulesSignature || rulesSignatureFor(state.settings);
+      state.rulesAccepted = data.rulesAccepted ?? {};
+      renderRoomRules(state.settings);
+      renderWaitingPlayers();
+      updateStartButton();
+      break;
+    case 'rules_accepted':
+      if (data.playerId && data.rulesSignature) {
+        state.rulesAccepted = { ...(state.rulesAccepted || {}), [String(data.playerId)]: String(data.rulesSignature) };
+        persistGameState({ status: currentScreen() === 'waiting' ? 'waiting' : 'playing' });
+        renderRoomRules(state.settings);
+        renderWaitingPlayers();
+        updateStartButton();
+      }
       break;
     case 'game_started':
       state.settings = normalizeSettings(data.settings);
@@ -760,6 +920,7 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.isHost = sid() === state.hostId;
       state.currentRound = 0;
       state.currentReaderId = null;
+      state.currentDirectTargetId = null;
       state.scores = {};
       state.players.forEach(p => { state.scores[p.id] = 0; });
       saveActiveSession();
@@ -797,6 +958,7 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.votes = data.votes ?? {};
       state.scores = data.scores ?? {};
       state.roundWinnerIds = Array.isArray(data.roundWinnerIds) ? data.roundWinnerIds.map(String) : (data.roundWinnerId ? [String(data.roundWinnerId)] : []);
+      state.currentDirectTargetId = data.directTargetId ? String(data.directTargetId) : state.currentDirectTargetId;
       persistGameState();
       _showReveal(data.round, data.question);
       break;
@@ -970,7 +1132,7 @@ window.App = {
       await connectSocket(code);
       emit({ type: 'player_joined', player: currentPlayer() });
       saveActiveSession();
-      if ((roomData.status === 'playing' || gameState.status === 'playing') && state.currentRound && (state.settings.onlyVoting || state.currentQuestion || state.currentInventorId)) _startRound({ roundNum: state.currentRound, question: state.currentQuestion, inventorId: state.currentInventorId, readerId: state.currentReaderId });
+      if ((roomData.status === 'playing' || gameState.status === 'playing') && state.currentRound && (state.settings.onlyVoting || state.currentQuestion || state.currentInventorId)) _startRound({ roundNum: state.currentRound, question: state.currentQuestion, inventorId: state.currentInventorId, readerId: state.currentReaderId, directTargetId: state.currentDirectTargetId });
       else if ((roomData.status === 'finished' || gameState.status === 'finished') && Object.keys(state.scores).length) _showFinal();
       else App._enterWaiting();
     } catch (error) {
@@ -987,7 +1149,7 @@ window.App = {
       btn.disabled = true;
     }
     try {
-      const settings = normalizeSettings({ rounds: 5, infiniteMode: false, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, onlyVoting: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
+      const settings = normalizeSettings({ rounds: 5, infiniteMode: false, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, onlyVoting: false, directMode: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -1065,6 +1227,7 @@ window.App = {
       if (byId('cfg-show-vote-counts')) byId('cfg-show-vote-counts').checked = s.showVoteCounts;
       if (byId('cfg-hide-ties')) byId('cfg-hide-ties').checked = s.hideTies === true;
       if (byId('cfg-only-voting')) byId('cfg-only-voting').checked = s.onlyVoting === true;
+      if (byId('cfg-direct-mode')) byId('cfg-direct-mode').checked = s.directMode === true;
       byId('cfg-questions').checked = s.useQuestions;
       byId('cfg-visible').checked = s.questionVisible ?? true;
       if (byId('cfg-round-time')) byId('cfg-round-time').value = String(s.roundTimeLimit ?? 30);
@@ -1074,12 +1237,14 @@ window.App = {
       renderQuestionCategorySettings(s.questionCategories);
       App.updateQuestionMode();
       App.updateOnlyVotingMode();
+      App.updateDirectMode();
       App.updateReaderMode();
       App.updateResultOptionsMode();
       App.updateInfiniteMode();
       App.updateVisibleHint();
     }
     renderWaitingPlayers();
+    renderRoomRules(state.settings);
     renderQR(getShareUrl());
     saveActiveSession();
     showScreen('waiting');
@@ -1222,9 +1387,93 @@ window.App = {
     visibleRow?.classList.toggle('pointer-events-none', onlyVoting);
 
     App.updateQuestionMode?.();
+    App.updateDirectMode?.();
     App.updateReaderMode?.();
     App.updateVisibleHint?.();
     updateStartButton();
+  },
+
+
+  updateDirectMode() {
+    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+    const directMode = !onlyVoting && (byId('cfg-direct-mode')?.checked ?? false);
+    const questionsInput = byId('cfg-questions');
+    const categoryCard = byId('question-categories-card');
+    const directCard = byId('direct-mode-card');
+    if (byId('cfg-direct-mode')) {
+      byId('cfg-direct-mode').disabled = onlyVoting;
+      if (onlyVoting) byId('cfg-direct-mode').checked = false;
+    }
+    directCard?.classList.toggle('opacity-50', onlyVoting);
+    directCard?.classList.toggle('pointer-events-none', onlyVoting);
+    if (questionsInput) {
+      questionsInput.disabled = onlyVoting || directMode;
+      if (directMode) questionsInput.checked = true;
+    }
+    categoryCard?.classList.toggle('hidden', onlyVoting || directMode);
+    categoryCard?.classList.toggle('opacity-50', directMode);
+    categoryCard?.classList.toggle('pointer-events-none', directMode);
+    App.updateReaderMode?.();
+    App.updateVisibleHint?.();
+    updateStartButton();
+  },
+
+  syncRulesPreview() {
+    if (!state.isHost) {
+      renderRoomRules(state.settings);
+      return;
+    }
+    const settings = App.collectSettingsFromUI?.() || state.settings;
+    const signature = rulesSignatureFor(settings);
+    if (signature !== state.rulesSignature) {
+      resetRulesAcceptance(settings);
+      state.settings = settings;
+      emit({ type: 'rules_update', settings, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted });
+      persistGameState({ status: 'waiting' });
+    }
+    renderRoomRules(settings);
+    renderWaitingPlayers();
+  },
+
+  acceptRoomRules() {
+    if (!state.user) return;
+    const signature = state.rulesSignature || rulesSignatureFor(state.settings);
+    state.rulesSignature = signature;
+    state.rulesAccepted = { ...(state.rulesAccepted || {}), [sid()]: signature };
+    emit({ type: 'rules_accepted', playerId: sid(), rulesSignature: signature });
+    persistGameState({ status: currentScreen() === 'waiting' ? 'waiting' : 'playing' });
+    renderRoomRules(state.settings);
+    renderWaitingPlayers();
+    updateStartButton();
+    toast('Reglas aceptadas', '✅');
+  },
+
+  collectSettingsFromUI() {
+    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+    const directMode = !onlyVoting && (byId('cfg-direct-mode')?.checked ?? false);
+    const useQuestions = !onlyVoting && (directMode || byId('cfg-questions')?.checked);
+    const privateVote = byId('cfg-private')?.checked ?? false;
+    const questionReaderMode = (!onlyVoting && useQuestions) ? (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value || 'everyone') : 'everyone';
+    const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
+    return normalizeSettings({
+      rounds: Math.min(50, Math.max(1, parseInt(byId('cfg-rounds')?.value ?? '5', 10) || 5)),
+      infiniteMode: byId('cfg-infinite-mode')?.checked ?? false,
+      points: byId('cfg-points')?.checked ?? true,
+      privateVote,
+      adminCountsForVotes: byId('cfg-admin-counts')?.checked ?? true,
+      showAllResults,
+      redGreenMode: !showAllResults && (byId('cfg-red-green')?.checked ?? false),
+      showVoteCounts: privateVote ? (byId('cfg-show-vote-counts')?.checked ?? true) : true,
+      hideTies: byId('cfg-hide-ties')?.checked ?? false,
+      onlyVoting,
+      directMode,
+      useQuestions,
+      questionVisible: !onlyVoting && byId('cfg-visible')?.checked,
+      questionReaderMode,
+      questionReaderId: questionReaderMode === 'single' ? String(byId('cfg-question-reader-id')?.value || '') : null,
+      roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
+      questionCategories: App.getSelectedQuestionCategories?.() || [],
+    });
   },
 
 
@@ -1245,9 +1494,10 @@ window.App = {
 
   updateQuestionMode() {
     const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
-    const enabled = !onlyVoting && (byId('cfg-questions')?.checked ?? true);
+    const directMode = byId('cfg-direct-mode')?.checked ?? false;
+    const enabled = !onlyVoting && !directMode && (byId('cfg-questions')?.checked ?? true);
     const card = byId('question-categories-card');
-    card?.classList.toggle('hidden', onlyVoting);
+    card?.classList.toggle('hidden', onlyVoting || directMode);
     card?.classList.toggle('opacity-50', !enabled);
     card?.classList.toggle('pointer-events-none', !enabled);
     card?.querySelectorAll('input,button').forEach(el => { el.disabled = !enabled; });
@@ -1264,12 +1514,14 @@ window.App = {
     display.textContent = val;
     display.classList.add('scale-125');
     setTimeout(() => display.classList.remove('scale-125'), 200);
+    App.syncRulesPreview?.();
   },
 
   updateVisibleHint() {
     const hint = byId('cfg-visible-hint');
     if (!hint) return;
     if (byId('cfg-only-voting')?.checked) hint.textContent = 'Sin preguntas: solo se vota';
+    else if (byId('cfg-direct-mode')?.checked) hint.textContent = 'Pregunta directa: el jugador nombrado no puede recibir votos';
     else if (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value === 'single') hint.textContent = 'Solo el lector único ve la pregunta';
     else if (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value === 'random') hint.textContent = 'Un lector aleatorio ve cada pregunta';
     else hint.textContent = byId('cfg-visible').checked ? 'Todos ven la pregunta' : 'Solo el admin ve la pregunta';
@@ -1277,50 +1529,39 @@ window.App = {
 
   async startGame() {
     if (!state.isHost) return;
-    const adminCountsForVotes = byId('cfg-admin-counts')?.checked ?? true;
-    const pendingSettings = normalizeSettings({ ...state.settings, adminCountsForVotes });
-    if (votingPlayers(state.players, pendingSettings).length < 2) {
-      toast('Necesitas al menos 2 jugadores participantes para empezar', '👥');
+    const settings = App.collectSettingsFromUI();
+    const participantCount = votingPlayers(state.players, settings).length;
+    if (participantCount < 2 || (settings.directMode && participantCount < 3)) {
+      toast(settings.directMode ? 'Modo directo necesita al menos 3 jugadores participantes' : 'Necesitas al menos 2 jugadores participantes para empezar', '👥');
       updateStartButton();
       return;
     }
-    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
-    const useQuestions = !onlyVoting && byId('cfg-questions').checked;
-    const selectedCategories = App.getSelectedQuestionCategories();
-    if (!onlyVoting && useQuestions && !selectedCategories.length) {
+    if (!settings.onlyVoting && !settings.directMode && settings.useQuestions && !settings.questionCategories.length) {
       toast('Selecciona al menos una categoría', '🏷️');
       App.updateCategorySummary();
       return;
     }
-    const privateVote = byId('cfg-private').checked;
-    const questionReaderMode = (!onlyVoting && useQuestions) ? (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value || 'everyone') : 'everyone';
-    const questionReaderId = questionReaderMode === 'single' ? String(byId('cfg-question-reader-id')?.value || '') : null;
-    if (questionReaderMode === 'single' && !questionReaderId) {
+    if (settings.questionReaderMode === 'single' && !settings.questionReaderId) {
       toast('Elige quién será el lector único', '📖');
       App.updateReaderMode?.();
       return;
     }
-    const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
-    const infiniteMode = byId('cfg-infinite-mode')?.checked ?? false;
-    const rounds = Math.min(50, Math.max(1, parseInt(byId('cfg-rounds')?.value ?? '5', 10) || 5));
-    const settings = normalizeSettings({
-      rounds,
-      infiniteMode,
-      points: byId('cfg-points').checked,
-      privateVote,
-      adminCountsForVotes,
-      showAllResults,
-      redGreenMode: !showAllResults && (byId('cfg-red-green')?.checked ?? false),
-      showVoteCounts: privateVote ? (byId('cfg-show-vote-counts')?.checked ?? true) : true,
-      hideTies: byId('cfg-hide-ties')?.checked ?? false,
-      onlyVoting,
-      useQuestions,
-      questionVisible: !onlyVoting && byId('cfg-visible').checked,
-      questionReaderMode,
-      questionReaderId,
-      roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
-      questionCategories: selectedCategories,
-    });
+    const signature = rulesSignatureFor(settings);
+    if (state.rulesSignature !== signature) {
+      resetRulesAcceptance(settings);
+      state.settings = settings;
+      renderRoomRules(settings);
+      renderWaitingPlayers();
+      emit({ type: 'rules_update', settings, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted });
+      toast('Las reglas han cambiado. Todos deben aceptarlas.', '📜');
+      return;
+    }
+    if (!allRequiredRulesAccepted(settings)) {
+      renderRoomRules(settings);
+      renderWaitingPlayers();
+      toast('Todos los jugadores participantes deben aceptar las reglas', '📜');
+      return;
+    }
     state.settings = settings;
     state.scores = {};
     state.players.forEach(p => { state.scores[p.id] = 0; });
@@ -1458,6 +1699,7 @@ function closeRoomLocally(message = 'La sala ha terminado.') {
   state.currentQuestion = null;
   state.currentInventorId = null;
   state.currentReaderId = null;
+  state.currentDirectTargetId = null;
   state.hasVoted = false;
   setTimeout(() => {
     overlay.remove();
@@ -1503,16 +1745,40 @@ function getQuestionPoolForSettings(settings = state.settings) {
   return pool.length ? pool : categories.flatMap(category => category.questions.map(text => ({ text, categoryId: category.id, categoryName: category.name })));
 }
 
+
+function getDirectQuestionTemplates() {
+  const fallback = ['¿Quién tendría una historia más turbia con {player}?', '¿Quién acabaría discutiendo antes con {player}?'];
+  const templates = Array.isArray(window.directQuestionTemplates) ? window.directQuestionTemplates : fallback;
+  return templates.map(String).filter(text => text.includes('{player}'));
+}
+
+function buildDirectQuestionFor(target) {
+  const templates = getDirectQuestionTemplates();
+  const picked = templates[Math.floor(Math.random() * templates.length)] || '¿Quién se metería antes en un lío con {player}?';
+  return picked.replaceAll('{player}', target?.username || 'esta persona');
+}
+
+function pickDirectTargetId(settings = state.settings) {
+  const candidates = votingPlayers(state.players, settings);
+  if (candidates.length < 3) return null;
+  return String(candidates[Math.floor(Math.random() * candidates.length)].id);
+}
+
 function _buildRound(roundNum) {
-  if (state.settings.onlyVoting) return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: null, readerId: null, onlyVoting: true };
+  if (state.settings.onlyVoting) return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: null, readerId: null, directTargetId: null, onlyVoting: true };
+  if (state.settings.directMode) {
+    const directTargetId = pickDirectTargetId(state.settings);
+    const directTarget = directTargetById(directTargetId);
+    return { roundNum, question: buildDirectQuestionFor(directTarget), questionCategoryId: 'direct-mode', questionCategoryName: 'Modo directo', inventorId: null, readerId: pickQuestionReaderId(state.settings), directTargetId, directMode: true };
+  }
   const questionList = getQuestionPoolForSettings();
   if (state.settings.useQuestions && questionList.length) {
     const picked = questionList[Math.floor(Math.random() * questionList.length)];
-    return { roundNum, question: typeof picked === 'string' ? picked : picked.text, questionCategoryId: picked.categoryId ?? null, questionCategoryName: picked.categoryName ?? null, inventorId: null, readerId: pickQuestionReaderId(state.settings) };
+    return { roundNum, question: typeof picked === 'string' ? picked : picked.text, questionCategoryId: picked.categoryId ?? null, questionCategoryName: picked.categoryName ?? null, inventorId: null, readerId: pickQuestionReaderId(state.settings), directTargetId: null };
   }
   const participants = votingPlayers();
   const inventorPool = participants.length ? participants : state.players;
-  return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: inventorPool[Math.floor(Math.random() * inventorPool.length)]?.id ?? sid(), readerId: null };
+  return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: inventorPool[Math.floor(Math.random() * inventorPool.length)]?.id ?? sid(), readerId: null, directTargetId: null };
 }
 
 function allPlayersVoted() {
@@ -1525,8 +1791,8 @@ function _doReveal() {
   if (!state.isHost) return;
   stopTimer(false);
   const voteCounts = {};
-  const participants = votingPlayers();
-  participants.forEach(p => { voteCounts[p.id] = 0; });
+  const candidates = votablePlayers();
+  candidates.forEach(p => { voteCounts[p.id] = 0; });
   const entries = validVoteEntries();
   entries.forEach(([, votedId]) => { voteCounts[String(votedId)] = (voteCounts[String(votedId)] || 0) + 1; });
   state.votes = Object.fromEntries(entries);
@@ -1543,7 +1809,7 @@ function _doReveal() {
       if (winnerIds.includes(String(votedId))) state.scores[String(voterId)] = (state.scores[String(voterId)] || 0) + 1;
     });
   }
-  emit({ type: 'round_reveal', round: state.currentRound, question: state.currentQuestion, votes: state.votes, scores: state.scores, roundWinnerIds: state.roundWinnerIds });
+  emit({ type: 'round_reveal', round: state.currentRound, question: state.currentQuestion, votes: state.votes, scores: state.scores, roundWinnerIds: state.roundWinnerIds, directTargetId: state.currentDirectTargetId });
   _showReveal(state.currentRound, state.currentQuestion);
 }
 
@@ -1646,23 +1912,24 @@ function renderQuestionCategorySettings(selectedIds = state.settings.questionCat
     const checked = selected.has(String(category.id)) ? 'checked' : '';
     return `<label class="question-category-pill rounded-2xl px-3 py-2.5 flex items-center gap-3 cursor-pointer transition"><input type="checkbox" class="question-category-checkbox w-4 h-4 flex-shrink-0" value="${id}" ${checked} /><span class="text-lg flex-shrink-0">${emoji}</span><span class="min-w-0 flex-1"><span class="block text-sm font-bold truncate">${name}</span><span class="block text-[11px] text-zinc-500">${count} preguntas</span></span></label>`;
   }).join('');
-  list.querySelectorAll('.question-category-checkbox').forEach(input => input.addEventListener('input', App.updateCategorySummary));
+  list.querySelectorAll('.question-category-checkbox').forEach(input => input.addEventListener('input', () => { App.updateCategorySummary(); App.syncRulesPreview?.(); }));
   App.updateQuestionMode?.();
 }
 
 function updateStartButton() {
   const btn = byId('admin-start')?.querySelector('button');
   if (!btn) return;
-  const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
-  const categoryOk = onlyVoting || !(byId('cfg-questions')?.checked) || App.getSelectedQuestionCategories?.().length > 0;
-  const pendingSettings = normalizeSettings({ ...state.settings, adminCountsForVotes: getAdminCountsSettingFromUI() });
+  const pendingSettings = state.isHost && App.collectSettingsFromUI ? App.collectSettingsFromUI() : normalizeSettings({ ...state.settings, adminCountsForVotes: getAdminCountsSettingFromUI() });
+  const onlyVoting = pendingSettings.onlyVoting === true;
+  const categoryOk = onlyVoting || pendingSettings.directMode || !pendingSettings.useQuestions || App.getSelectedQuestionCategories?.().length > 0;
   const participantCount = votingPlayers(state.players, pendingSettings).length;
-  const playersOk = participantCount >= 2;
-  const canStart = playersOk && categoryOk;
+  const playersOk = pendingSettings.directMode ? participantCount >= 3 : participantCount >= 2;
+  const rulesOk = allRequiredRulesAccepted(pendingSettings);
+  const canStart = playersOk && categoryOk && rulesOk;
   btn.disabled = !canStart;
   btn.classList.toggle('opacity-50', !canStart);
   btn.classList.toggle('cursor-not-allowed', !canStart);
-  btn.textContent = !playersOk ? 'Esperando más jugadores participantes' : (categoryOk ? '¡Comenzar partida! 🚀' : 'Elige una categoría');
+  btn.textContent = !playersOk ? (pendingSettings.directMode ? 'Modo directo necesita 3 participantes' : 'Esperando más jugadores participantes') : (!categoryOk ? 'Elige una categoría' : (rulesOk ? '¡Comenzar partida! 🚀' : 'Esperando aceptar reglas'));
 }
 
 function renderWaitingPlayers() {
@@ -1672,21 +1939,26 @@ function renderWaitingPlayers() {
   c.innerHTML = state.players.map((p, i) => {
     const username = escapeHTML(p.username);
     const hostBadge = p.id === state.hostId ? '<span class="text-xs bg-brand/20 text-brand-light px-2.5 py-0.5 rounded-full font-bold">Host</span>' : '';
-    const adminOutBadge = p.id === state.hostId && getAdminCountsSettingFromUI() === false ? '<span class="text-xs bg-red-500/15 text-red-200 px-2.5 py-0.5 rounded-full font-bold">No juega</span>' : '';
-    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}</div>`;
+    const pendingSettings = state.isHost && App.collectSettingsFromUI ? App.collectSettingsFromUI() : state.settings;
+    const adminOutBadge = p.id === state.hostId && pendingSettings.adminCountsForVotes === false ? '<span class="text-xs bg-red-500/15 text-red-200 px-2.5 py-0.5 rounded-full font-bold">No juega</span>' : '';
+    const required = votingPlayerIds(state.players, pendingSettings).has(String(p.id));
+    const acceptedRules = state.rulesAccepted?.[p.id] === rulesSignatureFor(pendingSettings);
+    const rulesBadge = required ? (acceptedRules ? '<span class="text-xs bg-emerald-500/15 text-emerald-200 px-2.5 py-0.5 rounded-full font-bold">Aceptado</span>' : '<span class="text-xs bg-amber-500/15 text-amber-200 px-2.5 py-0.5 rounded-full font-bold">Pendiente</span>') : '';
+    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop ${required ? (acceptedRules ? 'room-rules-player-ok' : 'room-rules-player-pending') : ''}" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}${rulesBadge}</div>`;
   }).join('');
   renderQuestionReaderOptions(byId('cfg-question-reader-id')?.value || state.settings.questionReaderId);
   App.updateReaderMode?.();
   updateStartButton();
 }
 
-function _startRound({ roundNum, question, inventorId, readerId }) {
+function _startRound({ roundNum, question, inventorId, readerId, directTargetId }) {
   stopTimer();
   clearRevealAnimationTimers();
   state.currentRound = roundNum;
   state.currentQuestion = question ? String(question) : null;
   state.currentInventorId = inventorId ? String(inventorId) : null;
   state.currentReaderId = readerId ? String(readerId) : null;
+  state.currentDirectTargetId = directTargetId ? String(directTargetId) : null;
   state.votes = {};
   state.roundWinnerIds = [];
   state.hasVoted = false;
@@ -1728,6 +2000,10 @@ function renderQuestionArea() {
     qEl.classList.remove('hidden');
     if (userCanReadCurrentQuestion()) {
       qEl.textContent = state.currentQuestion;
+      if (state.settings.directMode && state.currentDirectTargetId) {
+        const target = directTargetById();
+        qEl.insertAdjacentHTML('beforeend', `<span class="direct-target-badge block">No se puede votar a ${escapeHTML(playerLabel(target))}</span>`);
+      }
     } else if (hasReaderMode && reader) {
       qEl.innerHTML = `<span class="block text-sm text-zinc-400 font-medium mb-3">📖 ${escapeHTML(playerLabel(reader))} tiene la pregunta.</span><span class="block text-zinc-500 text-base">Escucha al lector y vota cuando la lea en voz alta.</span>`;
     } else {
@@ -1765,8 +2041,9 @@ function renderVoteGrid() {
   if (state.timerExpired) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Tiempo agotado. Esperando resultados...</p>');
   if (!currentUserCanVote()) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-500 text-sm py-10">Como admin no participas en esta partida: no puedes votar ni recibir votos.</p>');
   const participants = votingPlayers();
-  const votable = participants.filter(p => p.id !== sid());
-  grid.innerHTML = votable.length ? votable.map((p, i) => `<button class="vote-card rounded-2xl p-5 flex flex-col items-center gap-3 pop" data-id="${escapeHTML(p.id)}" style="animation-delay:${i * .06}s"><div class="w-14 h-14 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-2xl shadow-lg">${initials(p.username)}</div><span class="font-bold text-sm text-zinc-200">${escapeHTML(p.username)}</span></button>`).join('') : '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Necesitas más jugadores participantes para votar</p>';
+  const target = directTargetById();
+  const votable = votablePlayers().filter(p => p.id !== sid());
+  grid.innerHTML = (state.settings.directMode && target ? `<p class="col-span-2 direct-target-badge text-center">${escapeHTML(playerLabel(target))} está implicado en la pregunta y no puede recibir votos</p>` : '') + (votable.length ? votable.map((p, i) => `<button class="vote-card rounded-2xl p-5 flex flex-col items-center gap-3 pop" data-id="${escapeHTML(p.id)}" style="animation-delay:${i * .06}s"><div class="w-14 h-14 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-2xl shadow-lg">${initials(p.username)}</div><span class="font-bold text-sm text-zinc-200">${escapeHTML(p.username)}</span></button>`).join('') : '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">No tienes opciones válidas para votar</p>');
   grid.querySelectorAll('.vote-card').forEach(button => button.addEventListener('click', () => App.castVote(button.dataset.id)));
 }
 
@@ -1824,11 +2101,16 @@ function _showReveal(roundNum, question) {
   byId('reveal-round').textContent = roundNum;
   const qEl = byId('reveal-question');
   qEl.textContent = question || '';
+  if (state.settings.directMode && state.currentDirectTargetId && qEl) {
+    const target = directTargetById();
+    qEl.textContent = question ? `${question} · No se podía votar a ${playerLabel(target)}` : '';
+  }
   qEl.classList.toggle('hidden', !question);
 
   const participants = votingPlayers();
+  const resultPlayers = votablePlayers();
   const voteCounts = {};
-  participants.forEach(p => { voteCounts[p.id] = []; });
+  resultPlayers.forEach(p => { voteCounts[p.id] = []; });
   validVoteEntries().forEach(([voterId, votedId]) => {
     const key = String(votedId);
     if (!voteCounts[key]) return;
@@ -1836,7 +2118,7 @@ function _showReveal(roundNum, question) {
     voteCounts[key].push(playerLabel(voter));
   });
 
-  const naturalSorted = [...participants].sort((a, b) => (voteCounts[b.id]?.length || 0) - (voteCounts[a.id]?.length || 0));
+  const naturalSorted = [...resultPlayers].sort((a, b) => (voteCounts[b.id]?.length || 0) - (voteCounts[a.id]?.length || 0));
   const maxVotes = Math.max(...naturalSorted.map(p => voteCounts[p.id]?.length || 0), 1);
   const maxRealVotes = Math.max(...naturalSorted.map(p => voteCounts[p.id]?.length || 0), 0);
   const naturalWinnerIds = maxRealVotes > 0 ? naturalSorted.filter(p => (voteCounts[p.id]?.length || 0) === maxRealVotes).map(p => p.id) : [];
