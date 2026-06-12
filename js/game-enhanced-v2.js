@@ -436,6 +436,93 @@ function showHome({ join = false, roomCode = '', replace = true } = {}) {
   showScreen('login', true);
 }
 
+function createSettingsGroup(root, id, title, description) {
+  let group = byId(id);
+  if (!group) {
+    group = document.createElement('section');
+    group.id = id;
+    group.className = 'settings-layout-group';
+    group.innerHTML = `<div class="settings-layout-heading"><div><p class="settings-layout-title">${title}</p><p class="settings-layout-desc">${description}</p></div></div><div class="settings-layout-body"></div>`;
+    root.appendChild(group);
+  }
+  return group.querySelector('.settings-layout-body');
+}
+
+function detachOptionCard(inputId) {
+  const input = byId(inputId);
+  const label = input?.closest('label');
+  if (!label) return null;
+  const cardId = `settings-card-${inputId.replace(/^cfg-/, '').replaceAll('-', '-')}`;
+  let card = byId(cardId);
+  if (!card) {
+    const sourceCard = label.closest('.glass');
+    card = document.createElement('div');
+    card.id = cardId;
+    card.className = 'settings-option-card glass rounded-2xl overflow-hidden';
+    label.classList.add('settings-option-label');
+    card.appendChild(label);
+    if (sourceCard && sourceCard !== card && !sourceCard.querySelector('input[id^="cfg-"], select[id^="cfg-"]')) {
+      sourceCard.remove();
+    }
+  }
+  return card;
+}
+
+function normalizeSettingsCard(card) {
+  if (!card) return null;
+  card.classList.remove('mx-4', 'mb-2', 'mb-4', 'mt-2', 'mt-4');
+  card.classList.add('settings-layout-card');
+  return card;
+}
+
+function moveSettingsCard(card, target) {
+  const normalized = normalizeSettingsCard(card);
+  if (normalized && target && normalized.parentElement !== target) target.appendChild(normalized);
+}
+
+function organizeAdminSettingsLayout() {
+  const panel = byId('admin-settings');
+  if (!panel || byId('settings-layout-root')) return;
+
+  const root = document.createElement('div');
+  root.id = 'settings-layout-root';
+  root.className = 'settings-layout-root';
+  panel.appendChild(root);
+
+  const gameGroup = createSettingsGroup(root, 'settings-group-game', 'Partida', 'Duración y ritmo de cada ronda');
+  const questionGroup = createSettingsGroup(root, 'settings-group-questions', 'Preguntas', 'Qué se pregunta y quién puede leerlo');
+  const voteGroup = createSettingsGroup(root, 'settings-group-voting', 'Votación', 'Quién participa y cómo se vota');
+  const resultGroup = createSettingsGroup(root, 'settings-group-results', 'Resultados', 'Cómo se revela el ganador');
+
+  moveSettingsCard(byId('infinite-mode-card'), gameGroup);
+  moveSettingsCard(byId('cfg-rounds')?.closest('.glass'), gameGroup);
+  moveSettingsCard(byId('round-time-card'), gameGroup);
+
+  moveSettingsCard(byId('only-voting-card'), questionGroup);
+  moveSettingsCard(detachOptionCard('cfg-questions'), questionGroup);
+  moveSettingsCard(byId('question-categories-card'), questionGroup);
+  moveSettingsCard(byId('question-reader-card'), questionGroup);
+  moveSettingsCard(detachOptionCard('cfg-visible'), questionGroup);
+
+  moveSettingsCard(byId('admin-participation-card'), voteGroup);
+  moveSettingsCard(detachOptionCard('cfg-points'), voteGroup);
+  moveSettingsCard(detachOptionCard('cfg-private'), voteGroup);
+
+  moveSettingsCard(byId('result-options-card'), resultGroup);
+
+  panel.querySelectorAll(':scope > .glass').forEach(card => {
+    if (!card.querySelector('[id^="cfg-"], [id^="question-"], [id^="round-"]')) card.remove();
+  });
+}
+
+function ensureSettingsLayoutStyles() {
+  if (byId('democrazy-settings-layout-style')) return;
+  const style = document.createElement('style');
+  style.id = 'democrazy-settings-layout-style';
+  style.textContent = `.settings-layout-root{display:flex;flex-direction:column;gap:16px;padding:0 16px 18px}.settings-layout-group{display:flex;flex-direction:column;gap:8px}.settings-layout-heading{display:flex;align-items:center;justify-content:space-between;padding:2px 2px 0}.settings-layout-title{font-size:.72rem;font-weight:900;text-transform:uppercase;letter-spacing:.16em;color:#c4b5fd}.settings-layout-desc{font-size:.72rem;color:#71717a;margin-top:2px}.settings-layout-body{display:flex;flex-direction:column;gap:8px}.settings-layout-card{margin:0!important}.settings-option-card .settings-option-label{width:100%}@media(max-width:640px){.settings-layout-root{padding-left:0;padding-right:0;gap:14px}.settings-layout-heading{padding-left:2px;padding-right:2px}}`;
+  document.head.appendChild(style);
+}
+
 function injectDynamicUI() {
   renderHomeShell();
   if (!byId('share-modal')) {
@@ -512,6 +599,9 @@ function injectDynamicUI() {
     byId('cfg-questions').dataset.categoryBound = '1';
     byId('cfg-questions').addEventListener('input', () => App.updateQuestionMode?.());
   }
+
+  ensureSettingsLayoutStyles();
+  organizeAdminSettingsLayout();
 
   if (!byId('round-timer-box')) {
     const progress = byId('round-progress')?.parentElement;
