@@ -36,6 +36,7 @@ const state = {
     hideTies: false,
     onlyVoting: false,
     directMode: false,
+    secretQuestions: false,
     useQuestions: true,
     questionVisible: true,
     questionReaderMode: 'everyone',
@@ -69,6 +70,9 @@ const state = {
   rulesAccepted: {},
   rulesSignature: '',
   rulesAcceptanceOpen: false,
+  secretQuestions: [],
+  secretQuestionsReady: {},
+  secretQuestionsOpen: false,
 };
 
 const sid = () => String(state.user?.id ?? '');
@@ -197,7 +201,8 @@ function normalizeSettings(settings = {}) {
   const showAllResults = Boolean(settings.showAllResults ?? settings.viewAllResults ?? true);
   const onlyVoting = Boolean(settings.onlyVoting ?? settings.votingOnly ?? false);
   const directMode = !onlyVoting && Boolean(settings.directMode ?? settings.directQuestionMode ?? false);
-  const useQuestions = onlyVoting ? false : (directMode ? true : (settings.useQuestions ?? true));
+  const secretQuestions = !onlyVoting && !directMode && Boolean(settings.secretQuestions ?? settings.secretQuestionMode ?? false);
+  const useQuestions = onlyVoting ? false : ((directMode || secretQuestions) ? true : (settings.useQuestions ?? true));
   const questionReaderMode = (!onlyVoting && useQuestions) ? normalizeQuestionReaderMode(settings.questionReaderMode ?? settings.readerMode) : 'everyone';
   const questionReaderId = questionReaderMode === 'single' && settings.questionReaderId != null ? String(settings.questionReaderId) : null;
   return {
@@ -213,12 +218,13 @@ function normalizeSettings(settings = {}) {
     hideTies: Boolean(settings.hideTies ?? settings.hideTieBreaks ?? false),
     onlyVoting,
     directMode,
+    secretQuestions,
     useQuestions,
     questionVisible: onlyVoting ? false : (settings.questionVisible ?? true),
     questionReaderMode,
     questionReaderId,
     roundTimeLimit: Number(settings.roundTimeLimit ?? 30),
-    questionCategories: normalizeQuestionCategories(settings.questionCategories ?? settings.categories ?? settings.questionCategoryIds),
+    questionCategories: secretQuestions ? [] : normalizeQuestionCategories(settings.questionCategories ?? settings.categories ?? settings.questionCategoryIds),
   };
 }
 
@@ -249,6 +255,9 @@ function getGameState(extra = {}) {
     rulesAccepted: state.rulesAccepted,
     rulesSignature: state.rulesSignature,
     rulesAcceptanceOpen: state.rulesAcceptanceOpen,
+    secretQuestions: state.secretQuestions,
+    secretQuestionsReady: state.secretQuestionsReady,
+    secretQuestionsOpen: state.secretQuestionsOpen,
     screen: currentScreen(),
     latestEvent: extra.latestEvent ?? null,
   };
@@ -402,6 +411,9 @@ function applyGameState(gameState = {}) {
   state.rulesAccepted = gameState.rulesAccepted ?? state.rulesAccepted ?? {};
   state.rulesSignature = gameState.rulesSignature ?? state.rulesSignature ?? '';
   state.rulesAcceptanceOpen = Boolean(gameState.rulesAcceptanceOpen ?? state.rulesAcceptanceOpen ?? false);
+  state.secretQuestions = normalizeSecretQuestionList(gameState.secretQuestions ?? state.secretQuestions ?? []);
+  state.secretQuestionsReady = gameState.secretQuestionsReady ?? state.secretQuestionsReady ?? {};
+  state.secretQuestionsOpen = Boolean(gameState.secretQuestionsOpen ?? state.secretQuestionsOpen ?? false);
 }
 
 function persistGameState(extra = {}) {
@@ -524,6 +536,7 @@ function rulesSignatureFor(settings = state.settings) {
     hideTies: normalized.hideTies === true,
     onlyVoting: normalized.onlyVoting === true,
     directMode: normalized.directMode === true,
+    secretQuestions: normalized.secretQuestions === true,
     useQuestions: normalized.useQuestions === true,
     questionVisible: normalized.questionVisible === true,
     questionReaderMode: normalized.questionReaderMode || 'everyone',
@@ -541,6 +554,7 @@ function buildRulesList(settings = state.settings) {
   rules.push(normalized.roundTimeLimit > 0 ? `Cada ronda tiene ${normalized.roundTimeLimit} segundos para votar.` : 'No hay límite de tiempo por ronda.');
   if (normalized.onlyVoting) rules.push('Modo Solo votación: no habrá preguntas, se vota directamente.');
   else if (normalized.directMode) rules.push('Modo directo: cada pregunta nombra a un jugador y no se le puede votar en esa ronda.');
+  else if (normalized.secretQuestions) rules.push('Preguntas secretas: tras aceptar las reglas, los jugadores enviarán preguntas anónimas y solo esas se usarán en la partida.');
   else if (normalized.useQuestions) rules.push('Habrá preguntas del juego filtradas por las categorías elegidas.');
   else rules.push('Un jugador elegido por el juego inventará la pregunta de cada ronda.');
   if (!normalized.onlyVoting && normalized.useQuestions) {
@@ -616,11 +630,132 @@ function resetRulesAcceptance(settings = state.settings, { open = false } = {}) 
   state.rulesAccepted = {};
   state.rulesSignature = rulesSignatureFor(settings);
   state.rulesAcceptanceOpen = open;
+  resetSecretQuestionsPhase();
 }
 
 function allRequiredRulesAccepted(settings = state.settings) {
   const required = ruleAcceptancePlayers(settings);
   return required.length > 0 && missingRulesPlayers(settings).length === 0;
+}
+
+function normalizeSecretQuestionList(value = state.secretQuestions) {
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  return raw
+    .map(item => {
+      const text = String(typeof item === 'string' ? item : (item?.text ?? '')).trim().replace(/\s+/g, ' ');
+      if (text.length < 3) return null;
+      const id = String(typeof item === 'string' ? '' : (item?.id ?? '')).trim() || `sq-${text.toLowerCase().slice(0, 48)}`;
+      return { id, text: text.slice(0, 180) };
+    })
+    .filter(item => {
+      if (!item || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+}
+
+function resetSecretQuestionsPhase() {
+  state.secretQuestions = [];
+  state.secretQuestionsReady = {};
+  state.secretQuestionsOpen = false;
+}
+
+function secretQuestionParticipants(settings = state.settings) {
+  return ruleAcceptancePlayers(settings);
+}
+
+function missingSecretQuestionPlayers(settings = state.settings) {
+  const normalized = normalizeSettings(settings);
+  const signature = state.rulesSignature || rulesSignatureFor(normalized);
+  return secretQuestionParticipants(normalized).filter(player => state.secretQuestionsReady?.[String(player.id)] !== signature);
+}
+
+function allSecretQuestionsReady(settings = state.settings) {
+  const required = secretQuestionParticipants(settings);
+  return required.length > 0 && missingSecretQuestionPlayers(settings).length === 0;
+}
+
+function addSecretQuestionToState(question) {
+  const [normalized] = normalizeSecretQuestionList([question]);
+  if (!normalized) return false;
+  const current = normalizeSecretQuestionList(state.secretQuestions);
+  if (current.some(item => item.id === normalized.id || item.text.toLowerCase() === normalized.text.toLowerCase())) return false;
+  state.secretQuestions = [...current, normalized];
+  return true;
+}
+
+function startSecretQuestionsPhase(settings = state.settings) {
+  state.settings = normalizeSettings(settings);
+  state.rulesAcceptanceOpen = false;
+  state.secretQuestionsOpen = true;
+  state.secretQuestions = [];
+  state.secretQuestionsReady = {};
+  emit({ type: 'secret_questions_started', settings: state.settings, players: state.players, hostId: state.hostId, rulesSignature: state.rulesSignature, secretQuestions: state.secretQuestions, secretQuestionsReady: state.secretQuestionsReady });
+  persistGameState({ status: 'waiting' });
+  renderRoomRules(state.settings);
+  renderSecretQuestionsCard(state.settings);
+  renderWaitingPlayers();
+  updateStartButton();
+  toast('Ahora podéis enviar preguntas secretas.', '🕵️');
+}
+
+function renderSecretQuestionsCard(settings = state.settings) {
+  const card = byId('secret-questions-card');
+  if (!card) return;
+  const normalized = normalizeSettings(settings);
+  if (!normalized.secretQuestions || !state.secretQuestionsOpen) {
+    card.classList.add('hidden');
+    return;
+  }
+
+  card.classList.remove('hidden');
+  const signature = state.rulesSignature || rulesSignatureFor(normalized);
+  const requiredPlayers = secretQuestionParticipants(normalized);
+  const missing = missingSecretQuestionPlayers(normalized);
+  const ready = state.secretQuestionsReady?.[sid()] === signature;
+  const isRequired = requiredPlayers.some(player => String(player.id) === sid());
+  const questionCount = normalizeSecretQuestionList().length;
+
+  byId('secret-questions-count') && (byId('secret-questions-count').textContent = `${questionCount} pregunta${questionCount !== 1 ? 's' : ''}`);
+
+  const missingBox = byId('secret-questions-missing');
+  if (missingBox) {
+    missingBox.classList.toggle('hidden', missing.length === 0);
+    missingBox.innerHTML = missing.length
+      ? `<p class="text-[11px] font-black uppercase tracking-widest text-amber-200 mb-2">Falta por terminar</p><div class="flex flex-wrap gap-2">${missing.map(player => `<span class="bg-amber-500/15 text-amber-100 border border-amber-400/20 rounded-full px-3 py-1 text-xs font-bold">${escapeHTML(playerLabel(player))}</span>`).join('')}</div>`
+      : '';
+  }
+
+  const form = byId('secret-question-form');
+  const info = byId('secret-question-info');
+  if (form) form.classList.toggle('hidden', !isRequired);
+  if (info) {
+    info.textContent = isRequired
+      ? (ready ? 'Ya has terminado. Esperando al resto de jugadores.' : 'Escribe una o varias preguntas. Nadie verá quién las ha enviado.')
+      : 'No participas en la votación, así que no tienes que enviar preguntas.';
+  }
+
+  const textarea = byId('secret-question-input');
+  const addBtn = byId('secret-question-add-btn');
+  const readyBtn = byId('secret-question-ready-btn');
+  if (textarea) textarea.disabled = ready || !isRequired;
+  if (addBtn) addBtn.disabled = ready || !isRequired;
+  if (readyBtn) {
+    readyBtn.disabled = ready || !isRequired || questionCount === 0;
+    readyBtn.textContent = ready ? 'Preguntas enviadas ✓' : (questionCount === 0 ? 'Añadid al menos una pregunta' : 'Estoy listo');
+    readyBtn.classList.toggle('opacity-60', ready || !isRequired || questionCount === 0);
+  }
+}
+
+function maybeStartAfterSecretQuestions() {
+  if (!state.isHost || !state.secretQuestionsOpen || !state.settings.secretQuestions) return;
+  if (!allSecretQuestionsReady(state.settings)) return;
+  if (!normalizeSecretQuestionList().length) {
+    toast('Falta al menos una pregunta secreta.', '🕵️');
+    return;
+  }
+  App.startGame?.();
 }
 
 function createSettingsGroup(root, id, title, description) {
@@ -687,6 +822,7 @@ function organizeAdminSettingsLayout() {
 
   moveSettingsCard(byId('only-voting-card'), questionGroup);
   moveSettingsCard(byId('direct-mode-card'), questionGroup);
+  moveSettingsCard(byId('secret-questions-mode-card'), questionGroup);
   moveSettingsCard(detachOptionCard('cfg-questions'), questionGroup);
   moveSettingsCard(byId('question-categories-card'), questionGroup);
   moveSettingsCard(byId('question-reader-card'), questionGroup);
@@ -744,6 +880,15 @@ function injectDynamicUI() {
     byId('cfg-direct-mode').addEventListener('input', () => { App.updateDirectMode?.(); App.syncRulesPreview?.(); });
   }
 
+  if (!byId('secret-questions-mode-card')) {
+    const questionsCard = byId('cfg-questions')?.closest('.glass');
+    questionsCard?.insertAdjacentHTML('beforebegin', `<div id="secret-questions-mode-card" class="mx-4 mb-2 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Preguntas secretas</p><p class="text-xs text-zinc-500 mt-0.5">Tras aceptar reglas, enviáis preguntas anónimas y solo esas se usan</p></div><span class="toggle"><input id="cfg-secret-questions" type="checkbox" /><span class="toggle-track"></span></span></label></div>`);
+  }
+  if (byId('cfg-secret-questions') && !byId('cfg-secret-questions').dataset.secretQuestionsBound) {
+    byId('cfg-secret-questions').dataset.secretQuestionsBound = '1';
+    byId('cfg-secret-questions').addEventListener('input', () => { App.updateSecretQuestionsMode?.(); App.syncRulesPreview?.(); });
+  }
+
   if (!byId('question-reader-card')) {
     const questionsCard = byId('cfg-questions')?.closest('.glass');
     questionsCard?.insertAdjacentHTML('afterend', `<div id="question-reader-card" class="mx-4 mb-2 glass rounded-2xl p-4"><div class="mb-3"><p class="text-sm font-semibold">Lectura de preguntas</p><p class="text-xs text-zinc-500 mt-0.5">Decide quién ve y lee cada pregunta al grupo</p></div><div class="space-y-2"><label class="question-reader-option flex items-center gap-3 rounded-2xl bg-zinc-900/45 border border-white/5 px-3 py-3 cursor-pointer"><input type="radio" name="cfg-reader-mode" value="everyone" class="accent-brand" checked /><span><span class="block text-sm font-bold">Todos leen</span><span class="block text-xs text-zinc-500">Funciona como hasta ahora</span></span></label><label class="question-reader-option flex items-center gap-3 rounded-2xl bg-zinc-900/45 border border-white/5 px-3 py-3 cursor-pointer"><input type="radio" name="cfg-reader-mode" value="single" class="accent-brand" /><span><span class="block text-sm font-bold">Lector único</span><span class="block text-xs text-zinc-500">Un jugador lee todas las preguntas de la partida</span></span></label><div id="cfg-reader-single-box" class="hidden pl-7"><select id="cfg-question-reader-id" class="w-full bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"></select></div><label class="question-reader-option flex items-center gap-3 rounded-2xl bg-zinc-900/45 border border-white/5 px-3 py-3 cursor-pointer"><input type="radio" name="cfg-reader-mode" value="random" class="accent-brand" /><span><span class="block text-sm font-bold">Lector aleatorio</span><span class="block text-xs text-zinc-500">En cada pregunta, solo a un jugador le sale para leerla</span></span></label></div></div>`);
@@ -766,6 +911,11 @@ function injectDynamicUI() {
     const waitingScreen = byId('screen-waiting');
     const playersPanel = waitingScreen?.querySelector(':scope > .flex-1');
     playersPanel?.insertAdjacentHTML('beforebegin', `<div id="room-rules-card" class="hidden mx-4 mt-4 mb-2 glass rounded-2xl p-4 border border-brand/15"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-black text-brand-light">Antes de empezar</p><p class="text-xs text-zinc-500 mt-0.5">El admin ha lanzado la partida. Aceptad las reglas para comenzar de verdad.</p></div><span id="room-rules-accept-status" class="text-[10px] font-black uppercase tracking-widest bg-zinc-900/70 text-zinc-400 px-2.5 py-1 rounded-full">0/0</span></div><ul id="room-rules-list" class="space-y-1.5 text-xs text-zinc-300 list-disc pl-5"></ul><div id="room-rules-missing" class="hidden mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3"></div><button id="room-rules-accept-btn" type="button" onclick="App.acceptRoomRules()" class="btn-brand mt-4 w-full py-3 rounded-2xl text-sm font-black">Aceptar reglas</button></div>`);
+  }
+  if (!byId('secret-questions-card')) {
+    const waitingScreen = byId('screen-waiting');
+    const playersPanel = waitingScreen?.querySelector(':scope > .flex-1');
+    playersPanel?.insertAdjacentHTML('beforebegin', `<div id="secret-questions-card" class="hidden mx-4 mt-4 mb-2 glass rounded-2xl p-4 border border-amber-300/15"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-black text-amber-100">Preguntas secretas</p><p id="secret-question-info" class="text-xs text-zinc-500 mt-0.5">Escribe preguntas anónimas para esta partida.</p></div><span id="secret-questions-count" class="text-[10px] font-black uppercase tracking-widest bg-zinc-900/70 text-amber-100 px-2.5 py-1 rounded-full">0 preguntas</span></div><div id="secret-question-form" class="space-y-3"><textarea id="secret-question-input" maxlength="180" rows="3" placeholder="Ej: ¿Quién fingiría no conocerte si se vuelve famoso?" class="w-full bg-zinc-900/80 border border-zinc-700/70 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand/70 placeholder-zinc-600 resize-none"></textarea><p id="secret-question-error" class="hidden text-red-400 text-xs"></p><button id="secret-question-add-btn" type="button" onclick="App.addSecretQuestion()" class="w-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700/70 py-3 rounded-2xl text-sm font-black transition">Enviar pregunta anónima</button><button id="secret-question-ready-btn" type="button" onclick="App.readySecretQuestions()" class="btn-brand w-full py-3 rounded-2xl text-sm font-black">Estoy listo</button></div><div id="secret-questions-missing" class="hidden mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3"></div></div>`);
   }
   if (!byId('admin-participation-card')) {
     byId('result-options-card')?.insertAdjacentHTML('afterend', `<div id="admin-participation-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">El Admin cuenta para votos</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, el admin no puede votar ni recibir votos</p></div><span class="toggle"><input id="cfg-admin-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
@@ -1001,6 +1151,41 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
         }
       }
       break;
+    case 'secret_questions_started':
+      state.settings = normalizeSettings(data.settings ?? state.settings);
+      state.players = (data.players ?? state.players).map(normPlayer);
+      state.hostId = String(data.hostId ?? state.hostId ?? '');
+      state.isHost = sid() === state.hostId;
+      state.rulesSignature = data.rulesSignature || state.rulesSignature || rulesSignatureFor(state.settings);
+      state.rulesAcceptanceOpen = false;
+      state.secretQuestionsOpen = true;
+      state.secretQuestions = normalizeSecretQuestionList(data.secretQuestions ?? []);
+      state.secretQuestionsReady = data.secretQuestionsReady ?? {};
+      showScreen('waiting', true);
+      saveActiveSession();
+      renderRoomRules(state.settings);
+      renderSecretQuestionsCard(state.settings);
+      renderWaitingPlayers();
+      updateStartButton();
+      toast('Enviad preguntas secretas anónimas', '🕵️');
+      break;
+    case 'secret_question_added':
+      if (addSecretQuestionToState(data.question)) {
+        persistGameState({ status: 'waiting' });
+        renderSecretQuestionsCard(state.settings);
+        updateStartButton();
+      }
+      break;
+    case 'secret_questions_ready':
+      if (data.playerId && data.rulesSignature) {
+        state.secretQuestionsReady = { ...(state.secretQuestionsReady || {}), [String(data.playerId)]: String(data.rulesSignature) };
+        persistGameState({ status: 'waiting' });
+        renderSecretQuestionsCard(state.settings);
+        renderWaitingPlayers();
+        updateStartButton();
+        maybeStartAfterSecretQuestions();
+      }
+      break;
     case 'game_started':
       state.settings = normalizeSettings(data.settings);
       state.players = (data.players ?? []).map(normPlayer);
@@ -1010,6 +1195,9 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.currentReaderId = null;
       state.currentDirectTargetId = null;
       state.rulesAcceptanceOpen = false;
+      state.secretQuestionsOpen = false;
+      state.secretQuestions = normalizeSecretQuestionList(data.secretQuestions ?? state.secretQuestions);
+      state.secretQuestionsReady = {};
       state.scores = {};
       state.players.forEach(p => { state.scores[p.id] = 0; });
       saveActiveSession();
@@ -1238,7 +1426,7 @@ window.App = {
       btn.disabled = true;
     }
     try {
-      const settings = normalizeSettings({ rounds: 5, infiniteMode: false, points: true, privateVote: false, useJokers: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, onlyVoting: false, directMode: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
+      const settings = normalizeSettings({ rounds: 5, infiniteMode: false, points: true, privateVote: false, useJokers: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, onlyVoting: false, directMode: false, secretQuestions: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -1318,6 +1506,7 @@ window.App = {
       if (byId('cfg-hide-ties')) byId('cfg-hide-ties').checked = s.hideTies === true;
       if (byId('cfg-only-voting')) byId('cfg-only-voting').checked = s.onlyVoting === true;
       if (byId('cfg-direct-mode')) byId('cfg-direct-mode').checked = s.directMode === true;
+      if (byId('cfg-secret-questions')) byId('cfg-secret-questions').checked = s.secretQuestions === true;
       byId('cfg-questions').checked = s.useQuestions;
       byId('cfg-visible').checked = s.questionVisible ?? true;
       if (byId('cfg-round-time')) byId('cfg-round-time').value = String(s.roundTimeLimit ?? 30);
@@ -1328,6 +1517,7 @@ window.App = {
       App.updateQuestionMode();
       App.updateOnlyVotingMode();
       App.updateDirectMode();
+      App.updateSecretQuestionsMode();
       App.updateReaderMode();
       App.updateResultOptionsMode();
       App.updateInfiniteMode();
@@ -1335,6 +1525,7 @@ window.App = {
     }
     renderWaitingPlayers();
     renderRoomRules(state.settings);
+    renderSecretQuestionsCard(state.settings);
     renderQR(getShareUrl());
     saveActiveSession();
     showScreen('waiting');
@@ -1486,6 +1677,7 @@ window.App = {
 
     App.updateQuestionMode?.();
     App.updateDirectMode?.();
+    App.updateSecretQuestionsMode?.();
     App.updateReaderMode?.();
     App.updateVisibleHint?.();
     updateStartButton();
@@ -1496,6 +1688,8 @@ window.App = {
     const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
     const directMode = !onlyVoting && (byId('cfg-direct-mode')?.checked ?? false);
     const questionsInput = byId('cfg-questions');
+    const secretInput = byId('cfg-secret-questions');
+    const secretCard = byId('secret-questions-mode-card');
     const categoryCard = byId('question-categories-card');
     const directCard = byId('direct-mode-card');
     if (byId('cfg-direct-mode')) {
@@ -1504,6 +1698,12 @@ window.App = {
     }
     directCard?.classList.toggle('opacity-50', onlyVoting);
     directCard?.classList.toggle('pointer-events-none', onlyVoting);
+    if (secretInput) {
+      secretInput.disabled = onlyVoting || directMode;
+      if (onlyVoting || directMode) secretInput.checked = false;
+    }
+    secretCard?.classList.toggle('opacity-50', onlyVoting || directMode);
+    secretCard?.classList.toggle('pointer-events-none', onlyVoting || directMode);
     if (questionsInput) {
       questionsInput.disabled = onlyVoting || directMode;
       if (directMode) questionsInput.checked = true;
@@ -1528,6 +1728,7 @@ window.App = {
     if (changed) {
       state.rulesSignature = signature;
       state.rulesAccepted = {};
+      resetSecretQuestionsPhase();
       if (state.rulesAcceptanceOpen) {
         emit({ type: 'rules_acceptance_started', settings, players: state.players, hostId: state.hostId, rulesSignature: state.rulesSignature, rulesAccepted: state.rulesAccepted });
         toast('Las reglas han cambiado. Hay que aceptarlas otra vez.', '📜');
@@ -1562,7 +1763,8 @@ window.App = {
   collectSettingsFromUI() {
     const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
     const directMode = !onlyVoting && (byId('cfg-direct-mode')?.checked ?? false);
-    const useQuestions = !onlyVoting && (directMode || byId('cfg-questions')?.checked);
+    const secretQuestions = !onlyVoting && !directMode && (byId('cfg-secret-questions')?.checked ?? false);
+    const useQuestions = !onlyVoting && (directMode || secretQuestions || byId('cfg-questions')?.checked);
     const privateVote = byId('cfg-private')?.checked ?? false;
     const questionReaderMode = (!onlyVoting && useQuestions) ? (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value || 'everyone') : 'everyone';
     const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
@@ -1579,6 +1781,7 @@ window.App = {
       hideTies: byId('cfg-hide-ties')?.checked ?? false,
       onlyVoting,
       directMode,
+      secretQuestions,
       useQuestions,
       questionVisible: !onlyVoting && byId('cfg-visible')?.checked,
       questionReaderMode,
@@ -1588,6 +1791,32 @@ window.App = {
     });
   },
 
+
+  updateSecretQuestionsMode() {
+    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+    const directMode = byId('cfg-direct-mode')?.checked ?? false;
+    const secretQuestions = !onlyVoting && !directMode && (byId('cfg-secret-questions')?.checked ?? false);
+    const secretInput = byId('cfg-secret-questions');
+    const secretCard = byId('secret-questions-mode-card');
+    const questionsInput = byId('cfg-questions');
+    const categoryCard = byId('question-categories-card');
+    if (secretInput) {
+      secretInput.disabled = onlyVoting || directMode;
+      if (onlyVoting || directMode) secretInput.checked = false;
+    }
+    secretCard?.classList.toggle('opacity-50', onlyVoting || directMode);
+    secretCard?.classList.toggle('pointer-events-none', onlyVoting || directMode);
+    if (questionsInput) {
+      questionsInput.disabled = onlyVoting || directMode || secretQuestions;
+      if (secretQuestions) questionsInput.checked = true;
+    }
+    categoryCard?.classList.toggle('hidden', onlyVoting || directMode || secretQuestions);
+    categoryCard?.classList.toggle('opacity-50', secretQuestions);
+    categoryCard?.classList.toggle('pointer-events-none', secretQuestions);
+    App.updateReaderMode?.();
+    App.updateVisibleHint?.();
+    updateStartButton();
+  },
 
   updateReaderMode() {
     renderQuestionReaderOptions(byId('cfg-question-reader-id')?.value || state.settings.questionReaderId);
@@ -1607,9 +1836,10 @@ window.App = {
   updateQuestionMode() {
     const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
     const directMode = byId('cfg-direct-mode')?.checked ?? false;
-    const enabled = !onlyVoting && !directMode && (byId('cfg-questions')?.checked ?? true);
+    const secretQuestions = !onlyVoting && !directMode && (byId('cfg-secret-questions')?.checked ?? false);
+    const enabled = !onlyVoting && !directMode && !secretQuestions && (byId('cfg-questions')?.checked ?? true);
     const card = byId('question-categories-card');
-    card?.classList.toggle('hidden', onlyVoting || directMode);
+    card?.classList.toggle('hidden', onlyVoting || directMode || secretQuestions);
     card?.classList.toggle('opacity-50', !enabled);
     card?.classList.toggle('pointer-events-none', !enabled);
     card?.querySelectorAll('input,button').forEach(el => { el.disabled = !enabled; });
@@ -1634,6 +1864,7 @@ window.App = {
     if (!hint) return;
     if (byId('cfg-only-voting')?.checked) hint.textContent = 'Sin preguntas: solo se vota';
     else if (byId('cfg-direct-mode')?.checked) hint.textContent = 'Pregunta directa: el jugador nombrado no puede recibir votos';
+    else if (byId('cfg-secret-questions')?.checked) hint.textContent = 'Preguntas anónimas enviadas por los jugadores';
     else if (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value === 'single') hint.textContent = 'Solo el lector único ve la pregunta';
     else if (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value === 'random') hint.textContent = 'Un lector aleatorio ve cada pregunta';
     else hint.textContent = byId('cfg-visible').checked ? 'Todos ven la pregunta' : 'Solo el admin ve la pregunta';
@@ -1648,7 +1879,7 @@ window.App = {
       updateStartButton();
       return;
     }
-    if (!settings.onlyVoting && !settings.directMode && settings.useQuestions && !settings.questionCategories.length) {
+    if (!settings.onlyVoting && !settings.directMode && !settings.secretQuestions && settings.useQuestions && !settings.questionCategories.length) {
       toast('Selecciona al menos una categoría', '🏷️');
       App.updateCategorySummary();
       return;
@@ -1681,15 +1912,81 @@ window.App = {
       return;
     }
 
+    if (settings.secretQuestions) {
+      if (!state.secretQuestionsOpen) {
+        startSecretQuestionsPhase(settings);
+        return;
+      }
+      const secretList = normalizeSecretQuestionList();
+      if (!secretList.length) {
+        toast('Añadid al menos una pregunta secreta para empezar.', '🕵️');
+        renderSecretQuestionsCard(settings);
+        return;
+      }
+      if (!allSecretQuestionsReady(settings)) {
+        const missing = missingSecretQuestionPlayers(settings).map(player => playerLabel(player)).join(', ');
+        toast(missing ? `Falta terminar: ${missing}` : 'Todos deben terminar las preguntas secretas', '🕵️');
+        renderSecretQuestionsCard(settings);
+        return;
+      }
+    }
+
     state.rulesAcceptanceOpen = false;
+    state.secretQuestionsOpen = false;
+    state.secretQuestions = normalizeSecretQuestionList();
     state.scores = {};
     state.players.forEach(p => { state.scores[p.id] = 0; });
     state.currentRound = 0;
     const firstRound = _buildRound(1);
     await api.updateRoomState(state.room.code, { status: 'playing', roomSettings: settings, gameState: getGameState({ status: 'playing' }) });
-    emit({ type: 'game_started', settings, players: state.players, hostId: state.hostId, firstRound });
+    emit({ type: 'game_started', settings, players: state.players, hostId: state.hostId, firstRound, secretQuestions: state.secretQuestions });
     saveActiveSession();
     _startRound(firstRound);
+  },
+
+  addSecretQuestion() {
+    if (!state.secretQuestionsOpen || !state.settings.secretQuestions) return;
+    const input = byId('secret-question-input');
+    const err = byId('secret-question-error');
+    const text = String(input?.value || '').trim().replace(/\s+/g, ' ');
+    err?.classList.add('hidden');
+    if (text.length < 8) {
+      if (err) { err.textContent = 'Escribe una pregunta un poco más larga.'; err.classList.remove('hidden'); }
+      return;
+    }
+    const question = { id: `sq-${Date.now()}-${Math.random().toString(16).slice(2)}`, text: text.slice(0, 180) };
+    if (!addSecretQuestionToState(question)) {
+      if (err) { err.textContent = 'Esa pregunta ya está enviada.'; err.classList.remove('hidden'); }
+      return;
+    }
+    if (input) input.value = '';
+    emit({ type: 'secret_question_added', question });
+    persistGameState({ status: 'waiting' });
+    renderSecretQuestionsCard(state.settings);
+    updateStartButton();
+    toast('Pregunta secreta enviada', '🕵️');
+  },
+
+  readySecretQuestions() {
+    if (!state.secretQuestionsOpen || !state.settings.secretQuestions) return;
+    const signature = state.rulesSignature || rulesSignatureFor(state.settings);
+    if (!normalizeSecretQuestionList().length) {
+      toast('Añade al menos una pregunta secreta antes de terminar.', '🕵️');
+      return;
+    }
+    const required = secretQuestionParticipants(state.settings).some(player => String(player.id) === sid());
+    if (!required) {
+      toast('No participas en la votación', 'ℹ️');
+      return;
+    }
+    state.secretQuestionsReady = { ...(state.secretQuestionsReady || {}), [sid()]: signature };
+    emit({ type: 'secret_questions_ready', playerId: sid(), rulesSignature: signature });
+    persistGameState({ status: 'waiting' });
+    renderSecretQuestionsCard(state.settings);
+    renderWaitingPlayers();
+    updateStartButton();
+    toast('Preguntas listas', '✅');
+    maybeStartAfterSecretQuestions();
   },
 
   setCustomQuestion() {
@@ -1905,6 +2202,13 @@ function _buildRound(roundNum) {
     const directTarget = directTargetById(directTargetId);
     return { roundNum, question: buildDirectQuestionFor(directTarget), questionCategoryId: 'direct-mode', questionCategoryName: 'Modo directo', inventorId: null, readerId: pickQuestionReaderId(state.settings), directTargetId, directMode: true };
   }
+  if (state.settings.secretQuestions) {
+    const secretList = normalizeSecretQuestionList();
+    if (secretList.length) {
+      const picked = secretList[Math.floor(Math.random() * secretList.length)];
+      return { roundNum, question: picked.text, questionCategoryId: 'secret-questions', questionCategoryName: 'Preguntas secretas', inventorId: null, readerId: pickQuestionReaderId(state.settings), directTargetId: null, secretQuestions: true };
+    }
+  }
   const questionList = getQuestionPoolForSettings();
   if (state.settings.useQuestions && questionList.length) {
     const picked = questionList[Math.floor(Math.random() * questionList.length)];
@@ -2055,19 +2359,24 @@ function updateStartButton() {
   if (!btn) return;
   const pendingSettings = state.isHost && App.collectSettingsFromUI ? App.collectSettingsFromUI() : normalizeSettings({ ...state.settings, adminCountsForVotes: getAdminCountsSettingFromUI() });
   const onlyVoting = pendingSettings.onlyVoting === true;
-  const categoryOk = onlyVoting || pendingSettings.directMode || !pendingSettings.useQuestions || App.getSelectedQuestionCategories?.().length > 0;
+  const categoryOk = onlyVoting || pendingSettings.directMode || pendingSettings.secretQuestions || !pendingSettings.useQuestions || App.getSelectedQuestionCategories?.().length > 0;
   const participantCount = votingPlayers(state.players, pendingSettings).length;
   const playersOk = pendingSettings.directMode ? participantCount >= 3 : participantCount >= 2;
   const accepting = state.rulesAcceptanceOpen && state.rulesSignature === rulesSignatureFor(pendingSettings);
   const missing = accepting ? missingRulesPlayers(pendingSettings) : [];
-  const canStart = playersOk && categoryOk && !accepting;
+  const collectingSecretQuestions = state.secretQuestionsOpen && pendingSettings.secretQuestions === true;
+  const missingSecret = collectingSecretQuestions ? missingSecretQuestionPlayers(pendingSettings) : [];
+  const hasSecretQuestions = normalizeSecretQuestionList().length > 0;
+  const canStart = playersOk && categoryOk && !accepting && (!collectingSecretQuestions || (hasSecretQuestions && missingSecret.length === 0));
   btn.disabled = !canStart;
   btn.classList.toggle('opacity-50', !canStart);
   btn.classList.toggle('cursor-not-allowed', !canStart);
   if (!playersOk) btn.textContent = pendingSettings.directMode ? 'Modo directo necesita 3 participantes' : 'Esperando más jugadores participantes';
   else if (!categoryOk) btn.textContent = 'Elige una categoría';
   else if (accepting) btn.textContent = missing.length ? `Falta aceptar: ${missing.map(player => playerLabel(player)).join(', ')}` : 'Arrancando partida...';
-  else btn.textContent = 'Comenzar partida 🚀';
+  else if (collectingSecretQuestions && !hasSecretQuestions) btn.textContent = 'Esperando preguntas secretas';
+  else if (collectingSecretQuestions && missingSecret.length) btn.textContent = `Falta terminar: ${missingSecret.map(player => playerLabel(player)).join(', ')}`;
+  else btn.textContent = collectingSecretQuestions ? 'Empezar con preguntas secretas 🚀' : 'Comenzar partida 🚀';
 }
 
 function renderWaitingPlayers() {
@@ -2083,10 +2392,14 @@ function renderWaitingPlayers() {
     const acceptingRules = state.rulesAcceptanceOpen && state.rulesSignature === rulesSignatureFor(pendingSettings);
     const acceptedRules = acceptingRules && state.rulesAccepted?.[p.id] === state.rulesSignature;
     const rulesBadge = acceptingRules && required ? (acceptedRules ? '<span class="text-xs bg-emerald-500/15 text-emerald-200 px-2.5 py-0.5 rounded-full font-bold">Aceptado</span>' : '<span class="text-xs bg-amber-500/15 text-amber-200 px-2.5 py-0.5 rounded-full font-bold">Falta aceptar</span>') : '';
-    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop ${acceptingRules && required ? (acceptedRules ? 'room-rules-player-ok' : 'room-rules-player-pending') : ''}" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}${rulesBadge}</div>`;
+    const secretPending = state.secretQuestionsOpen && pendingSettings.secretQuestions && required;
+    const secretReady = secretPending && state.secretQuestionsReady?.[p.id] === (state.rulesSignature || rulesSignatureFor(pendingSettings));
+    const secretBadge = secretPending ? (secretReady ? '<span class="text-xs bg-emerald-500/15 text-emerald-200 px-2.5 py-0.5 rounded-full font-bold">Preguntas listas</span>' : '<span class="text-xs bg-amber-500/15 text-amber-200 px-2.5 py-0.5 rounded-full font-bold">Falta preguntas</span>') : '';
+    return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop ${acceptingRules && required ? (acceptedRules ? 'room-rules-player-ok' : 'room-rules-player-pending') : ''}" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}${rulesBadge}${secretBadge}</div>`;
   }).join('');
   renderQuestionReaderOptions(byId('cfg-question-reader-id')?.value || state.settings.questionReaderId);
   App.updateReaderMode?.();
+  renderSecretQuestionsCard(state.settings);
   updateStartButton();
 }
 
