@@ -21,6 +21,7 @@ const state = {
     redGreenMode: false,
     showVoteCounts: true,
     hideTies: false,
+    onlyVoting: false,
     useQuestions: true,
     questionVisible: true,
     roundTimeLimit: 30,
@@ -173,6 +174,7 @@ function normalizeQuestionCategories(value) {
 function normalizeSettings(settings = {}) {
   const privateVote = Boolean(settings.privateVote ?? false);
   const showAllResults = Boolean(settings.showAllResults ?? settings.viewAllResults ?? true);
+  const onlyVoting = Boolean(settings.onlyVoting ?? settings.votingOnly ?? false);
   return {
     rounds: Number(settings.rounds ?? 5),
     infiniteMode: Boolean(settings.infiniteMode ?? false),
@@ -183,8 +185,9 @@ function normalizeSettings(settings = {}) {
     redGreenMode: !showAllResults && Boolean(settings.redGreenMode ?? settings.redGreen ?? false),
     showVoteCounts: privateVote ? Boolean(settings.showVoteCounts ?? settings.viewVoteCount ?? true) : true,
     hideTies: Boolean(settings.hideTies ?? settings.hideTieBreaks ?? false),
-    useQuestions: settings.useQuestions ?? true,
-    questionVisible: settings.questionVisible ?? true,
+    onlyVoting,
+    useQuestions: onlyVoting ? false : (settings.useQuestions ?? true),
+    questionVisible: onlyVoting ? false : (settings.questionVisible ?? true),
     roundTimeLimit: Number(settings.roundTimeLimit ?? 30),
     questionCategories: normalizeQuestionCategories(settings.questionCategories ?? settings.categories ?? settings.questionCategoryIds),
   };
@@ -250,6 +253,10 @@ function votingPlayerIds(players = state.players, settings = state.settings) {
 
 function currentUserCanVote() {
   return votingPlayerIds().has(sid());
+}
+
+function roundAcceptsVotes() {
+  return state.settings.onlyVoting === true || Boolean(state.currentQuestion);
 }
 
 function validVoteEntries(votes = state.votes, players = state.players, settings = state.settings) {
@@ -408,6 +415,14 @@ function injectDynamicUI() {
   }
   if (!byId('cfg-round-time')) {
     roundsCard?.insertAdjacentHTML('afterend', `<div id="round-time-card" class="mx-4 mb-2 glass rounded-2xl"><div class="flex items-center justify-between gap-3 px-4 py-3.5"><div><p class="text-sm font-semibold">Tiempo por ronda</p><p class="text-xs text-zinc-500 mt-0.5">Evita que la partida se quede bloqueada</p></div><select id="cfg-round-time" class="bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"><option value="0">Sin límite</option><option value="15">15 s</option><option value="30" selected>30 s</option><option value="45">45 s</option><option value="60">60 s</option></select></div></div>`);
+  }
+  if (!byId('only-voting-card')) {
+    const questionsCard = byId('cfg-questions')?.closest('.glass');
+    questionsCard?.insertAdjacentHTML('beforebegin', `<div id="only-voting-card" class="mx-4 mb-2 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Solo votación</p><p class="text-xs text-zinc-500 mt-0.5">Sin preguntas: cada ronda es votar directamente</p></div><span class="toggle"><input id="cfg-only-voting" type="checkbox" /><span class="toggle-track"></span></span></label></div>`);
+  }
+  if (byId('cfg-only-voting') && !byId('cfg-only-voting').dataset.onlyVotingBound) {
+    byId('cfg-only-voting').dataset.onlyVotingBound = '1';
+    byId('cfg-only-voting').addEventListener('input', () => App.updateOnlyVotingMode?.());
   }
   if (!byId('result-options-card')) {
     const voteSettingsCard = byId('cfg-private')?.closest('.glass');
@@ -812,7 +827,7 @@ window.App = {
       await connectSocket(code);
       emit({ type: 'player_joined', player: currentPlayer() });
       saveActiveSession();
-      if ((roomData.status === 'playing' || gameState.status === 'playing') && state.currentRound && (state.currentQuestion || state.currentInventorId)) _startRound({ roundNum: state.currentRound, question: state.currentQuestion, inventorId: state.currentInventorId });
+      if ((roomData.status === 'playing' || gameState.status === 'playing') && state.currentRound && (state.settings.onlyVoting || state.currentQuestion || state.currentInventorId)) _startRound({ roundNum: state.currentRound, question: state.currentQuestion, inventorId: state.currentInventorId });
       else if ((roomData.status === 'finished' || gameState.status === 'finished') && Object.keys(state.scores).length) _showFinal();
       else App._enterWaiting();
     } catch (error) {
@@ -829,7 +844,7 @@ window.App = {
       btn.disabled = true;
     }
     try {
-      const settings = normalizeSettings({ rounds: 5, infiniteMode: false, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
+      const settings = normalizeSettings({ rounds: 5, infiniteMode: false, points: true, privateVote: false, showAllResults: true, redGreenMode: false, showVoteCounts: true, hideTies: false, onlyVoting: false, useQuestions: true, questionVisible: true, roundTimeLimit: 30, questionCategories: getAllQuestionCategoryIds() });
       const res = await api.createRoom(GAME_ID, sid(), settings, { status: 'waiting', hostId: sid(), players: [currentPlayer()], settings });
       state.room = { code: res.room_code ?? res.code, id: String(res.room_id ?? res.id) };
       state.hostId = sid();
@@ -906,11 +921,13 @@ window.App = {
       if (byId('cfg-red-green')) byId('cfg-red-green').checked = s.redGreenMode;
       if (byId('cfg-show-vote-counts')) byId('cfg-show-vote-counts').checked = s.showVoteCounts;
       if (byId('cfg-hide-ties')) byId('cfg-hide-ties').checked = s.hideTies === true;
+      if (byId('cfg-only-voting')) byId('cfg-only-voting').checked = s.onlyVoting === true;
       byId('cfg-questions').checked = s.useQuestions;
       byId('cfg-visible').checked = s.questionVisible ?? true;
       if (byId('cfg-round-time')) byId('cfg-round-time').value = String(s.roundTimeLimit ?? 30);
       renderQuestionCategorySettings(s.questionCategories);
       App.updateQuestionMode();
+      App.updateOnlyVotingMode();
       App.updateResultOptionsMode();
       App.updateInfiniteMode();
       App.updateVisibleHint();
@@ -1025,11 +1042,40 @@ window.App = {
     }
   },
 
+  updateOnlyVotingMode() {
+    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+    const questionsInput = byId('cfg-questions');
+    const visibleInput = byId('cfg-visible');
+    const questionsCard = questionsInput?.closest('.glass');
+    const visibleRow = visibleInput?.closest('label');
+
+    if (questionsInput) {
+      questionsInput.disabled = onlyVoting;
+      if (onlyVoting) questionsInput.checked = false;
+    }
+    if (visibleInput) {
+      visibleInput.disabled = onlyVoting;
+      if (onlyVoting) visibleInput.checked = false;
+    }
+
+    questionsCard?.classList.toggle('opacity-50', onlyVoting);
+    questionsCard?.classList.toggle('pointer-events-none', onlyVoting);
+    visibleRow?.classList.toggle('opacity-50', onlyVoting);
+    visibleRow?.classList.toggle('pointer-events-none', onlyVoting);
+
+    App.updateQuestionMode?.();
+    App.updateVisibleHint?.();
+    updateStartButton();
+  },
+
   updateQuestionMode() {
-    const enabled = byId('cfg-questions')?.checked ?? true;
+    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+    const enabled = !onlyVoting && (byId('cfg-questions')?.checked ?? true);
     const card = byId('question-categories-card');
+    card?.classList.toggle('hidden', onlyVoting);
     card?.classList.toggle('opacity-50', !enabled);
     card?.classList.toggle('pointer-events-none', !enabled);
+    card?.querySelectorAll('input,button').forEach(el => { el.disabled = !enabled; });
     App.updateCategorySummary();
   },
 
@@ -1045,7 +1091,10 @@ window.App = {
   },
 
   updateVisibleHint() {
-    byId('cfg-visible-hint').textContent = byId('cfg-visible').checked ? 'Todos ven la pregunta' : 'Solo el admin ve la pregunta';
+    const hint = byId('cfg-visible-hint');
+    if (!hint) return;
+    if (byId('cfg-only-voting')?.checked) hint.textContent = 'Sin preguntas: solo se vota';
+    else hint.textContent = byId('cfg-visible').checked ? 'Todos ven la pregunta' : 'Solo el admin ve la pregunta';
   },
 
   async startGame() {
@@ -1057,9 +1106,10 @@ window.App = {
       updateStartButton();
       return;
     }
-    const useQuestions = byId('cfg-questions').checked;
+    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+    const useQuestions = !onlyVoting && byId('cfg-questions').checked;
     const selectedCategories = App.getSelectedQuestionCategories();
-    if (useQuestions && !selectedCategories.length) {
+    if (!onlyVoting && useQuestions && !selectedCategories.length) {
       toast('Selecciona al menos una categoría', '🏷️');
       App.updateCategorySummary();
       return;
@@ -1078,8 +1128,9 @@ window.App = {
       redGreenMode: !showAllResults && (byId('cfg-red-green')?.checked ?? false),
       showVoteCounts: privateVote ? (byId('cfg-show-vote-counts')?.checked ?? true) : true,
       hideTies: byId('cfg-hide-ties')?.checked ?? false,
+      onlyVoting,
       useQuestions,
-      questionVisible: byId('cfg-visible').checked,
+      questionVisible: !onlyVoting && byId('cfg-visible').checked,
       roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
       questionCategories: selectedCategories,
     });
@@ -1112,7 +1163,7 @@ window.App = {
   },
 
   castVote(votedId) {
-    if (state.hasVoted || !state.currentQuestion || state.timerExpired) return;
+    if (state.hasVoted || !roundAcceptsVotes() || state.timerExpired) return;
     if (!currentUserCanVote()) {
       toast('El admin no participa en esta partida', '🚫');
       return;
@@ -1249,6 +1300,7 @@ function getQuestionPoolForSettings(settings = state.settings) {
 }
 
 function _buildRound(roundNum) {
+  if (state.settings.onlyVoting) return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: null, onlyVoting: true };
   const questionList = getQuestionPoolForSettings();
   if (state.settings.useQuestions && questionList.length) {
     const picked = questionList[Math.floor(Math.random() * questionList.length)];
@@ -1292,7 +1344,7 @@ function _doReveal() {
 }
 
 function maybeStartRoundTimer() {
-  if (!state.currentQuestion) return;
+  if (!roundAcceptsVotes()) return;
   const limit = Number(state.settings.roundTimeLimit || 0);
   if (limit <= 0) {
     stopTimer(false);
@@ -1385,7 +1437,8 @@ function renderQuestionCategorySettings(selectedIds = state.settings.questionCat
 function updateStartButton() {
   const btn = byId('admin-start')?.querySelector('button');
   if (!btn) return;
-  const categoryOk = !(byId('cfg-questions')?.checked) || App.getSelectedQuestionCategories?.().length > 0;
+  const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+  const categoryOk = onlyVoting || !(byId('cfg-questions')?.checked) || App.getSelectedQuestionCategories?.().length > 0;
   const pendingSettings = normalizeSettings({ ...state.settings, adminCountsForVotes: getAdminCountsSettingFromUI() });
   const participantCount = votingPlayers(state.players, pendingSettings).length;
   const playersOk = participantCount >= 2;
@@ -1437,6 +1490,12 @@ function _startRound({ roundNum, question, inventorId }) {
 function renderQuestionArea() {
   const inventorEl = byId('question-inventor');
   const qEl = byId('game-question');
+  if (state.settings.onlyVoting) {
+    inventorEl?.classList.add('hidden');
+    qEl?.classList.add('hidden');
+    if (qEl) qEl.textContent = '';
+    return;
+  }
   const canSeeQuestion = state.settings.questionVisible || state.isHost;
   if (state.currentQuestion) {
     inventorEl.classList.add('hidden');
@@ -1470,7 +1529,7 @@ function renderScoresHeader() {
 function renderVoteGrid() {
   const grid = byId('vote-grid');
   if (!grid) return;
-  if (!state.currentQuestion) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">La votación se activará cuando haya una pregunta.</p>');
+  if (!roundAcceptsVotes()) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">La votación se activará cuando empiece la ronda.</p>');
   if (state.timerExpired) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-600 text-sm py-10">Tiempo agotado. Esperando resultados...</p>');
   if (!currentUserCanVote()) return void (grid.innerHTML = '<p class="col-span-2 text-center text-zinc-500 text-sm py-10">Como admin no participas en esta partida: no puedes votar ni recibir votos.</p>');
   const participants = votingPlayers();
@@ -1520,8 +1579,8 @@ function renderVoteStatus() {
   const el = byId('votes-status');
   if (!el) return;
   const voted = new Set(validVoteEntries().map(([voterId]) => String(voterId))).size;
-  const total = state.currentQuestion ? votingPlayers().length : 0;
-  if (!state.currentQuestion) el.textContent = 'Esperando pregunta para iniciar la votación';
+  const total = roundAcceptsVotes() ? votingPlayers().length : 0;
+  if (!roundAcceptsVotes()) el.textContent = 'Esperando para iniciar la votación';
   else if (total < 2) el.textContent = 'No hay suficientes jugadores participantes para votar';
   else if (state.timerExpired) el.textContent = `Tiempo agotado · ${voted} de ${total} votaron`;
   else el.textContent = `${voted} de ${total} han votado`;

@@ -1,6 +1,6 @@
 # Democrazy
 
-Party game web multijugador donde aparece una pregunta, todos votan a qué jugador le pega más y se revelan resultados por ronda. Por defecto la partida tiene un número definido de preguntas, y el administrador puede activar el modo de preguntas infinitas si quiere jugar hasta cerrar la sala manualmente.
+Party game web multijugador donde aparece una pregunta, todos votan a qué jugador le pega más y se revelan resultados por ronda. También puede jugarse en modo **Solo votación**, sin preguntas ni inventor de ronda. Por defecto la partida tiene un número definido de preguntas, y el administrador puede activar el modo de preguntas infinitas si quiere jugar hasta cerrar la sala manualmente.
 
 ## Stack técnico
 
@@ -52,13 +52,14 @@ Incluye:
 - validación de mínimo 2 jugadores,
 - cambio de sala al iniciar nueva partida,
 - renderizado de preguntas, categorías, votos y resultados,
+- modo **Solo votación** para rondas sin preguntas,
 - opciones avanzadas de resultados: ganador único, ocultar empates, rojo/verde y ocultación de recuentos,
 - modo opcional de preguntas infinitas,
 - cierre de sala para todos al pulsar **Fin del juego**.
 
 ### `js/questions.js`
 
-Banco de preguntas predefinidas agrupadas por categorías. Expone `window.questionCategories` y mantiene `window.questions` como lista plana compatible.
+Banco ampliado de preguntas predefinidas agrupadas por categorías: 39 categorías y 1170 preguntas. Expone `window.questionCategories` y mantiene `window.questions` como lista plana compatible.
 
 ## Ejecutar en local
 
@@ -87,6 +88,7 @@ Evita abrir con `file://`.
   redGreenMode: false,
   showVoteCounts: true,
   hideTies: false,
+  onlyVoting: false,
   useQuestions: true,
   questionVisible: true,
   roundTimeLimit: 30,
@@ -105,6 +107,7 @@ Evita abrir con `file://`.
 | `redGreenMode` | Solo disponible con `showAllResults: false`; muestra pantalla roja al más votado y verde al resto |
 | `showVoteCounts` | Solo configurable con voto secreto; permite ocultar el número de votos |
 | `hideTies` | Si hay empate entre los más votados, el host elige uno al azar y oculta el empate |
+| `onlyVoting` | Si está activo, no hay preguntas ni jugador inventor: cada ronda es solo votar |
 | `useQuestions` | Usa preguntas predefinidas |
 | `questionVisible` | Permite ocultar la pregunta a invitados |
 | `roundTimeLimit` | Tiempo máximo por ronda en segundos; `0` desactiva el límite |
@@ -118,8 +121,8 @@ Evita abrir con `file://`.
 - El botón de comenzar se bloquea con menos de 2 jugadores participantes.
 - Si falla `itty-sockets`, se usa polling real contra la API en lugar de `BroadcastChannel` local.
 - La reconexión restaura jugadores, settings, ronda, pregunta, votos y puntuaciones desde `game_state`.
-- Las preguntas están agrupadas por categorías seleccionables por el host antes de empezar.
-- El host puede elegir si se muestran todos los resultados, solo el ganador, ocultar empates con ganador aleatorio, modo rojo/verde, recuento de votos y si el admin participa en la votación.
+- Las preguntas están agrupadas en 39 categorías seleccionables por el host antes de empezar, con 1170 preguntas en total.
+- El host puede elegir si se juega con preguntas o en modo **Solo votación**, si se muestran todos los resultados, solo el ganador, ocultar empates con ganador aleatorio, modo rojo/verde, recuento de votos y si el admin participa en la votación.
 - Por defecto se juega con un número de preguntas configurable; si se activa **Preguntas infinitas**, la partida avanza indefinidamente.
 - Al pulsar **Fin del juego**, todos los jugadores salen de la sala y se borra la sesión activa.
 - La etiqueta de host usa `hostId`, no la posición del jugador en el array.
