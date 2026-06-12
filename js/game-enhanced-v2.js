@@ -732,14 +732,14 @@ function renderSecretQuestionsCard(settings = state.settings) {
   if (form) form.classList.toggle('hidden', !isRequired);
   if (info) {
     info.textContent = isRequired
-      ? (ready ? 'Ya has terminado. Esperando al resto de jugadores.' : 'Escribe una o varias preguntas. Nadie verá quién las ha enviado.')
+      ? (ready ? 'Ya has terminado. Esperando al resto de jugadores.' : 'Escribe una pregunta y envíala. Puedes repetir el envío para añadir más, siempre de una en una.')
       : 'No participas en la votación, así que no tienes que enviar preguntas.';
   }
 
-  const textarea = byId('secret-question-input');
+  const input = byId('secret-question-input');
   const addBtn = byId('secret-question-add-btn');
   const readyBtn = byId('secret-question-ready-btn');
-  if (textarea) textarea.disabled = ready || !isRequired;
+  if (input) input.disabled = ready || !isRequired;
   if (addBtn) addBtn.disabled = ready || !isRequired;
   if (readyBtn) {
     readyBtn.disabled = ready || !isRequired || questionCount === 0;
@@ -915,7 +915,7 @@ function injectDynamicUI() {
   if (!byId('secret-questions-card')) {
     const waitingScreen = byId('screen-waiting');
     const playersPanel = waitingScreen?.querySelector(':scope > .flex-1');
-    playersPanel?.insertAdjacentHTML('beforebegin', `<div id="secret-questions-card" class="hidden mx-4 mt-4 mb-2 glass rounded-2xl p-4 border border-amber-300/15"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-black text-amber-100">Preguntas secretas</p><p id="secret-question-info" class="text-xs text-zinc-500 mt-0.5">Escribe preguntas anónimas para esta partida.</p></div><span id="secret-questions-count" class="text-[10px] font-black uppercase tracking-widest bg-zinc-900/70 text-amber-100 px-2.5 py-1 rounded-full">0 preguntas</span></div><div id="secret-question-form" class="space-y-3"><textarea id="secret-question-input" maxlength="180" rows="3" placeholder="Ej: ¿Quién fingiría no conocerte si se vuelve famoso?" class="w-full bg-zinc-900/80 border border-zinc-700/70 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand/70 placeholder-zinc-600 resize-none"></textarea><p id="secret-question-error" class="hidden text-red-400 text-xs"></p><button id="secret-question-add-btn" type="button" onclick="App.addSecretQuestion()" class="w-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700/70 py-3 rounded-2xl text-sm font-black transition">Enviar pregunta anónima</button><button id="secret-question-ready-btn" type="button" onclick="App.readySecretQuestions()" class="btn-brand w-full py-3 rounded-2xl text-sm font-black">Estoy listo</button></div><div id="secret-questions-missing" class="hidden mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3"></div></div>`);
+    playersPanel?.insertAdjacentHTML('beforebegin', `<div id="secret-questions-card" class="hidden mx-4 mt-4 mb-2 glass rounded-2xl p-4 border border-amber-300/15"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-black text-amber-100">Preguntas secretas</p><p id="secret-question-info" class="text-xs text-zinc-500 mt-0.5">Envía preguntas anónimas, una por envío.</p></div><span id="secret-questions-count" class="text-[10px] font-black uppercase tracking-widest bg-zinc-900/70 text-amber-100 px-2.5 py-1 rounded-full">0 preguntas</span></div><div id="secret-question-form" class="space-y-3"><input id="secret-question-input" type="text" maxlength="180" autocomplete="off" placeholder="Ej: ¿Quién fingiría no conocerte si se vuelve famoso?" class="w-full bg-zinc-900/80 border border-zinc-700/70 rounded-2xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-brand/70 placeholder-zinc-600" onkeydown="if(event.key==='Enter')App.addSecretQuestion()" /><p id="secret-question-error" class="hidden text-red-400 text-xs"></p><button id="secret-question-add-btn" type="button" onclick="App.addSecretQuestion()" class="w-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700/70 py-3 rounded-2xl text-sm font-black transition">Enviar esta pregunta anónima</button><button id="secret-question-ready-btn" type="button" onclick="App.readySecretQuestions()" class="btn-brand w-full py-3 rounded-2xl text-sm font-black">Estoy listo</button></div><div id="secret-questions-missing" class="hidden mt-4 rounded-2xl border border-amber-400/20 bg-amber-500/10 p-3"></div></div>`);
   }
   if (!byId('admin-participation-card')) {
     byId('result-options-card')?.insertAdjacentHTML('afterend', `<div id="admin-participation-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden"><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">El Admin cuenta para votos</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, el admin no puede votar ni recibir votos</p></div><span class="toggle"><input id="cfg-admin-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
@@ -1890,7 +1890,8 @@ window.App = {
       return;
     }
     const signature = rulesSignatureFor(settings);
-    const mustOpenAcceptance = !state.rulesAcceptanceOpen || state.rulesSignature !== signature;
+    const rulesAlreadyAccepted = state.rulesSignature === signature && allRequiredRulesAccepted(settings);
+    const mustOpenAcceptance = !rulesAlreadyAccepted && (!state.rulesAcceptanceOpen || state.rulesSignature !== signature);
     state.settings = settings;
 
     if (mustOpenAcceptance) {
