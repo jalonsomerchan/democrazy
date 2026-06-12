@@ -506,7 +506,7 @@ function injectDynamicUI() {
   if (!byId('question-categories-card')) {
     const questionsCard = byId('cfg-questions')?.closest('.glass');
     const categoryAnchor = byId('question-reader-card') || questionsCard;
-    categoryAnchor?.insertAdjacentHTML('afterend', `<div id="question-categories-card" class="mx-4 mb-4 glass rounded-2xl p-4"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-semibold">Categorías de preguntas</p><p class="text-xs text-zinc-500 mt-0.5">Elige qué temas entran en la partida</p></div><span id="question-category-count" class="text-xs bg-brand/20 text-brand-light px-2.5 py-1 rounded-full font-bold whitespace-nowrap">Todas</span></div><div class="flex gap-2 mb-3"><button type="button" onclick="App.selectQuestionCategories(true)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Todas</button><button type="button" onclick="App.selectQuestionCategories(false)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Limpiar</button></div><div id="question-category-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div><p id="question-category-summary" class="text-xs text-zinc-500 mt-3"></p></div>`);
+    categoryAnchor?.insertAdjacentHTML('afterend', `<div id="question-categories-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden"><button id="question-categories-toggle" type="button" onclick="App.toggleQuestionCategoriesAccordion()" aria-expanded="false" class="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-white/[.03] transition"><span class="min-w-0"><span class="block text-sm font-semibold">Categorías de preguntas</span><span id="question-category-summary" class="block text-xs text-zinc-500 mt-0.5 truncate">Todas las categorías activas</span></span><span class="flex items-center gap-2 flex-shrink-0"><span id="question-category-count" class="text-xs bg-brand/20 text-brand-light px-2.5 py-1 rounded-full font-bold whitespace-nowrap">Todas</span><span id="question-category-chevron" class="text-zinc-500 text-lg leading-none transition-transform">⌄</span></span></button><div id="question-category-panel" class="hidden border-t border-white/5 px-4 pb-4 pt-3"><div class="flex gap-2 mb-3"><button type="button" onclick="App.selectQuestionCategories(true)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Todas</button><button type="button" onclick="App.selectQuestionCategories(false)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Limpiar</button></div><div id="question-category-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[44vh] overflow-y-auto pr-1"></div></div></div>`);
   }
   if (byId('cfg-questions') && !byId('cfg-questions').dataset.categoryBound) {
     byId('cfg-questions').dataset.categoryBound = '1';
@@ -1040,6 +1040,17 @@ window.App = {
     } catch {}
   },
 
+  toggleQuestionCategoriesAccordion(forceOpen) {
+    const panel = byId('question-category-panel');
+    const toggle = byId('question-categories-toggle');
+    const chevron = byId('question-category-chevron');
+    if (!panel) return;
+    const open = typeof forceOpen === 'boolean' ? forceOpen : panel.classList.contains('hidden');
+    panel.classList.toggle('hidden', !open);
+    toggle?.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (chevron) chevron.style.transform = open ? 'rotate(180deg)' : 'rotate(0deg)';
+  },
+
   getSelectedQuestionCategories() {
     return [...document.querySelectorAll('.question-category-checkbox:checked')].map(input => input.value);
   },
@@ -1054,16 +1065,16 @@ window.App = {
     const selected = App.getSelectedQuestionCategories();
     const summary = byId('question-category-summary');
     const count = byId('question-category-count');
+    const totalQuestions = categories
+      .filter(category => selected.includes(String(category.id)))
+      .reduce((acc, category) => acc + category.questions.length, 0);
     if (summary) {
-      if (!categories.length) summary.textContent = 'No hay categorías cargadas.';
-      else if (!selected.length) summary.textContent = 'Marca al menos una categoría para usar preguntas predefinidas.';
-      else if (selected.length === categories.length) summary.textContent = `${categories.length} categorías activas · ${window.questions?.length ?? 0} preguntas disponibles.`;
-      else {
-        const totalQuestions = categories.filter(category => selected.includes(String(category.id))).reduce((acc, category) => acc + category.questions.length, 0);
-        summary.textContent = `${selected.length} de ${categories.length} categorías activas · ${totalQuestions} preguntas disponibles.`;
-      }
+      if (!categories.length) summary.textContent = 'No hay categorías cargadas';
+      else if (!selected.length) summary.textContent = 'Sin categorías seleccionadas';
+      else if (selected.length === categories.length) summary.textContent = `${categories.length} categorías · ${window.questions?.length ?? totalQuestions} preguntas`;
+      else summary.textContent = `${selected.length}/${categories.length} categorías · ${totalQuestions} preguntas`;
     }
-    if (count) count.textContent = !selected.length ? '0' : (selected.length === categories.length ? 'Todas' : String(selected.length));
+    if (count) count.textContent = !selected.length ? '0' : (selected.length === categories.length ? 'Todas' : `${selected.length}/${categories.length}`);
     updateStartButton();
   },
 
