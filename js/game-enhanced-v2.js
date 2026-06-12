@@ -1,3 +1,9 @@
+try {
+  await import('./extra-questions.js');
+} catch (error) {
+  console.warn('No se pudieron cargar las preguntas extra', error);
+}
+
 const api = new window.GameAPI();
 const GAME_ID = 12;
 const SOCKET_RECONNECT_MS = 1800;
@@ -24,12 +30,15 @@ const state = {
     onlyVoting: false,
     useQuestions: true,
     questionVisible: true,
+    questionReaderMode: 'everyone',
+    questionReaderId: null,
     roundTimeLimit: 30,
     questionCategories: [],
   },
   currentRound: 0,
   currentQuestion: null,
   currentInventorId: null,
+  currentReaderId: null,
   votes: {},
   scores: {},
   roundWinnerIds: [],
@@ -175,6 +184,9 @@ function normalizeSettings(settings = {}) {
   const privateVote = Boolean(settings.privateVote ?? false);
   const showAllResults = Boolean(settings.showAllResults ?? settings.viewAllResults ?? true);
   const onlyVoting = Boolean(settings.onlyVoting ?? settings.votingOnly ?? false);
+  const useQuestions = onlyVoting ? false : (settings.useQuestions ?? true);
+  const questionReaderMode = (!onlyVoting && useQuestions) ? normalizeQuestionReaderMode(settings.questionReaderMode ?? settings.readerMode) : 'everyone';
+  const questionReaderId = questionReaderMode === 'single' && settings.questionReaderId != null ? String(settings.questionReaderId) : null;
   return {
     rounds: Number(settings.rounds ?? 5),
     infiniteMode: Boolean(settings.infiniteMode ?? false),
@@ -186,8 +198,10 @@ function normalizeSettings(settings = {}) {
     showVoteCounts: privateVote ? Boolean(settings.showVoteCounts ?? settings.viewVoteCount ?? true) : true,
     hideTies: Boolean(settings.hideTies ?? settings.hideTieBreaks ?? false),
     onlyVoting,
-    useQuestions: onlyVoting ? false : (settings.useQuestions ?? true),
+    useQuestions,
     questionVisible: onlyVoting ? false : (settings.questionVisible ?? true),
+    questionReaderMode,
+    questionReaderId,
     roundTimeLimit: Number(settings.roundTimeLimit ?? 30),
     questionCategories: normalizeQuestionCategories(settings.questionCategories ?? settings.categories ?? settings.questionCategoryIds),
   };
@@ -211,6 +225,7 @@ function getGameState(extra = {}) {
     currentRound: state.currentRound,
     currentQuestion: state.currentQuestion,
     currentInventorId: state.currentInventorId,
+    currentReaderId: state.currentReaderId,
     votes: state.votes,
     scores: state.scores,
     timerExpired: state.timerExpired,
@@ -251,6 +266,26 @@ function votingPlayerIds(players = state.players, settings = state.settings) {
   return new Set(votingPlayers(players, settings).map(player => String(player.id)));
 }
 
+function normalizeQuestionReaderMode(value) {
+  const mode = String(value || 'everyone');
+  return ['everyone', 'single', 'random'].includes(mode) ? mode : 'everyone';
+}
+
+function questionReaderCandidates(players = state.players, settings = state.settings) {
+  return votingPlayers(players, settings);
+}
+
+function questionReaderById(id = state.currentReaderId) {
+  return state.players.find(player => String(player.id) === String(id));
+}
+
+function userCanReadCurrentQuestion() {
+  if (!state.currentQuestion) return true;
+  const mode = normalizeQuestionReaderMode(state.settings.questionReaderMode);
+  if (mode === 'single' || mode === 'random') return sid() === String(state.currentReaderId);
+  return state.settings.questionVisible || state.isHost;
+}
+
 function currentUserCanVote() {
   return votingPlayerIds().has(sid());
 }
@@ -289,6 +324,7 @@ function applyGameState(gameState = {}) {
   state.currentRound = Number(gameState.currentRound ?? state.currentRound ?? 0);
   state.currentQuestion = gameState.currentQuestion ?? state.currentQuestion;
   state.currentInventorId = gameState.currentInventorId ? String(gameState.currentInventorId) : state.currentInventorId;
+  state.currentReaderId = gameState.currentReaderId ? String(gameState.currentReaderId) : state.currentReaderId;
   state.votes = gameState.votes ?? state.votes ?? {};
   state.scores = gameState.scores ?? state.scores ?? {};
   state.timerExpired = Boolean(gameState.timerExpired ?? state.timerExpired);
@@ -424,6 +460,21 @@ function injectDynamicUI() {
     byId('cfg-only-voting').dataset.onlyVotingBound = '1';
     byId('cfg-only-voting').addEventListener('input', () => App.updateOnlyVotingMode?.());
   }
+
+  if (!byId('question-reader-card')) {
+    const questionsCard = byId('cfg-questions')?.closest('.glass');
+    questionsCard?.insertAdjacentHTML('afterend', `<div id="question-reader-card" class="mx-4 mb-2 glass rounded-2xl p-4"><div class="mb-3"><p class="text-sm font-semibold">Lectura de preguntas</p><p class="text-xs text-zinc-500 mt-0.5">Decide quién ve y lee cada pregunta al grupo</p></div><div class="space-y-2"><label class="question-reader-option flex items-center gap-3 rounded-2xl bg-zinc-900/45 border border-white/5 px-3 py-3 cursor-pointer"><input type="radio" name="cfg-reader-mode" value="everyone" class="accent-brand" checked /><span><span class="block text-sm font-bold">Todos leen</span><span class="block text-xs text-zinc-500">Funciona como hasta ahora</span></span></label><label class="question-reader-option flex items-center gap-3 rounded-2xl bg-zinc-900/45 border border-white/5 px-3 py-3 cursor-pointer"><input type="radio" name="cfg-reader-mode" value="single" class="accent-brand" /><span><span class="block text-sm font-bold">Lector único</span><span class="block text-xs text-zinc-500">Un jugador lee todas las preguntas de la partida</span></span></label><div id="cfg-reader-single-box" class="hidden pl-7"><select id="cfg-question-reader-id" class="w-full bg-zinc-800/70 border border-zinc-700/60 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:ring-2 focus:ring-brand/70"></select></div><label class="question-reader-option flex items-center gap-3 rounded-2xl bg-zinc-900/45 border border-white/5 px-3 py-3 cursor-pointer"><input type="radio" name="cfg-reader-mode" value="random" class="accent-brand" /><span><span class="block text-sm font-bold">Lector aleatorio</span><span class="block text-xs text-zinc-500">En cada pregunta, solo a un jugador le sale para leerla</span></span></label></div></div>`);
+  }
+  document.querySelectorAll('input[name="cfg-reader-mode"]').forEach(input => {
+    if (!input.dataset.readerModeBound) {
+      input.dataset.readerModeBound = '1';
+      input.addEventListener('input', () => App.updateReaderMode?.());
+    }
+  });
+  if (byId('cfg-question-reader-id') && !byId('cfg-question-reader-id').dataset.readerSelectBound) {
+    byId('cfg-question-reader-id').dataset.readerSelectBound = '1';
+    byId('cfg-question-reader-id').addEventListener('input', updateStartButton);
+  }
   if (!byId('result-options-card')) {
     const voteSettingsCard = byId('cfg-private')?.closest('.glass');
     voteSettingsCard?.insertAdjacentHTML('afterend', `<div id="result-options-card" class="mx-4 mb-4 glass rounded-2xl overflow-hidden divide-y divide-white/5"><div class="px-4 py-3.5"><p class="text-sm font-semibold">Resultados</p><p class="text-xs text-zinc-500 mt-0.5">Controla qué se revela al terminar cada votación</p></div><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver todos los resultados</p><p class="text-xs text-zinc-500 mt-0.5">Si se desmarca, solo se revela el más votado</p></div><span class="toggle"><input id="cfg-show-all-results" type="checkbox" checked /><span class="toggle-track"></span></span></label><label class="flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ocultar empates</p><p class="text-xs text-zinc-500 mt-0.5">Si hay empate, el juego elige uno al azar para más caos</p></div><span class="toggle"><input id="cfg-hide-ties" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-red-green-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Rojo / Verde</p><p class="text-xs text-zinc-500 mt-0.5">Rojo si eres el más votado, verde si no</p></div><span class="toggle"><input id="cfg-red-green" type="checkbox" /><span class="toggle-track"></span></span></label><label id="cfg-vote-count-row" class="hidden flex items-center justify-between px-4 py-3.5 cursor-pointer hover:bg-white/[.03] transition"><div><p class="text-sm font-semibold">Ver número de votos</p><p class="text-xs text-zinc-500 mt-0.5">Solo configurable cuando el voto es secreto</p></div><span class="toggle"><input id="cfg-show-vote-counts" type="checkbox" checked /><span class="toggle-track"></span></span></label></div>`);
@@ -454,7 +505,8 @@ function injectDynamicUI() {
   }
   if (!byId('question-categories-card')) {
     const questionsCard = byId('cfg-questions')?.closest('.glass');
-    questionsCard?.insertAdjacentHTML('afterend', `<div id="question-categories-card" class="mx-4 mb-4 glass rounded-2xl p-4"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-semibold">Categorías de preguntas</p><p class="text-xs text-zinc-500 mt-0.5">Elige qué temas entran en la partida</p></div><span id="question-category-count" class="text-xs bg-brand/20 text-brand-light px-2.5 py-1 rounded-full font-bold whitespace-nowrap">Todas</span></div><div class="flex gap-2 mb-3"><button type="button" onclick="App.selectQuestionCategories(true)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Todas</button><button type="button" onclick="App.selectQuestionCategories(false)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Limpiar</button></div><div id="question-category-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div><p id="question-category-summary" class="text-xs text-zinc-500 mt-3"></p></div>`);
+    const categoryAnchor = byId('question-reader-card') || questionsCard;
+    categoryAnchor?.insertAdjacentHTML('afterend', `<div id="question-categories-card" class="mx-4 mb-4 glass rounded-2xl p-4"><div class="flex items-start justify-between gap-3 mb-3"><div><p class="text-sm font-semibold">Categorías de preguntas</p><p class="text-xs text-zinc-500 mt-0.5">Elige qué temas entran en la partida</p></div><span id="question-category-count" class="text-xs bg-brand/20 text-brand-light px-2.5 py-1 rounded-full font-bold whitespace-nowrap">Todas</span></div><div class="flex gap-2 mb-3"><button type="button" onclick="App.selectQuestionCategories(true)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Todas</button><button type="button" onclick="App.selectQuestionCategories(false)" class="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded-xl text-xs font-bold transition">Limpiar</button></div><div id="question-category-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2"></div><p id="question-category-summary" class="text-xs text-zinc-500 mt-3"></p></div>`);
   }
   if (byId('cfg-questions') && !byId('cfg-questions').dataset.categoryBound) {
     byId('cfg-questions').dataset.categoryBound = '1';
@@ -468,7 +520,7 @@ function injectDynamicUI() {
   if (!byId('democrazy-enhanced-style')) {
     const style = document.createElement('style');
     style.id = 'democrazy-enhanced-style';
-    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}@keyframes epicFlash{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.035)}}@keyframes epicCrownDrop{0%{opacity:0;transform:translateY(-28px) scale(.6) rotate(-10deg)}60%{opacity:1;transform:translateY(4px) scale(1.16) rotate(5deg)}100%{opacity:1;transform:translateY(0) scale(1) rotate(0)}}@keyframes epicNameReveal{0%{opacity:0;filter:blur(16px);letter-spacing:.35em;transform:translateY(18px) scale(.92)}70%{opacity:1;filter:blur(0);letter-spacing:.05em;transform:translateY(-3px) scale(1.04)}100%{opacity:1;filter:blur(0);letter-spacing:.02em;transform:translateY(0) scale(1)}}@keyframes epicCardIn{0%{opacity:0;transform:translateY(22px) scale(.94);filter:blur(10px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}@keyframes epicGlowSweep{0%{transform:translateX(-130%) skewX(-20deg)}100%{transform:translateX(130%) skewX(-20deg)}}.epic-reveal-stage{position:relative;overflow:hidden}.epic-reveal-stage:before{content:'';position:absolute;inset:-40%;background:radial-gradient(circle at 50% 20%,rgba(124,58,237,.32),transparent 34%),radial-gradient(circle at 15% 85%,rgba(245,158,11,.18),transparent 28%);pointer-events:none;animation:epicFlash 2.3s ease-in-out infinite}.epic-reveal-content{position:relative;z-index:1}.epic-winner-name{animation:epicNameReveal .95s cubic-bezier(.18,1.35,.32,1) both;text-shadow:0 0 26px rgba(167,139,250,.55)}.epic-crown{animation:epicCrownDrop .8s cubic-bezier(.18,1.35,.32,1) both}.epic-result-card{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both;position:relative;overflow:hidden}.epic-result-card:after{content:'';position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:epicGlowSweep 1.05s ease-out .15s both;pointer-events:none}.epic-dots span{animation:epicFlash 1s ease-in-out infinite}.epic-dots span:nth-child(2){animation-delay:.15s}.epic-dots span:nth-child(3){animation-delay:.3s}@keyframes redGreenPulse{0%,100%{transform:scale(1);filter:saturate(1)}50%{transform:scale(1.018);filter:saturate(1.25)}}.red-green-red{border-color:rgba(248,113,113,.55)!important;box-shadow:0 0 48px rgba(239,68,68,.24)!important;background:linear-gradient(145deg,rgba(127,29,29,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-green{border-color:rgba(52,211,153,.55)!important;box-shadow:0 0 48px rgba(16,185,129,.24)!important;background:linear-gradient(145deg,rgba(6,78,59,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-badge{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
+    style.textContent = `@keyframes votePulse{0%{transform:scale(1)}45%{transform:scale(1.08)}100%{transform:scale(1)}}@keyframes voteRipple{from{opacity:.45;transform:translate(-50%,-50%) scale(.35)}to{opacity:0;transform:translate(-50%,-50%) scale(2.7)}}.vote-card.vote-pop{animation:votePulse .34s cubic-bezier(.34,1.4,.64,1)}.vote-ripple{position:absolute;left:50%;top:50%;width:84px;height:84px;border-radius:999px;background:rgba(124,58,237,.65);pointer-events:none;animation:voteRipple .55s ease-out forwards}.timer-danger #round-timer-label{color:#f87171}.timer-danger #round-timer-bar{background:linear-gradient(90deg,#ef4444,#f97316)}#qr-panel{display:none!important}#login-form input::selection{background:rgba(124,58,237,.35)}.question-category-pill{border:1px solid rgba(255,255,255,.06);background:rgba(39,39,42,.72)}.question-category-pill:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}.question-category-pill input{accent-color:#7C3AED}.question-reader-option:has(input:checked){border-color:rgba(124,58,237,.7);background:rgba(124,58,237,.18);box-shadow:0 0 0 1px rgba(124,58,237,.22)}@keyframes epicFlash{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.035)}}@keyframes epicCrownDrop{0%{opacity:0;transform:translateY(-28px) scale(.6) rotate(-10deg)}60%{opacity:1;transform:translateY(4px) scale(1.16) rotate(5deg)}100%{opacity:1;transform:translateY(0) scale(1) rotate(0)}}@keyframes epicNameReveal{0%{opacity:0;filter:blur(16px);letter-spacing:.35em;transform:translateY(18px) scale(.92)}70%{opacity:1;filter:blur(0);letter-spacing:.05em;transform:translateY(-3px) scale(1.04)}100%{opacity:1;filter:blur(0);letter-spacing:.02em;transform:translateY(0) scale(1)}}@keyframes epicCardIn{0%{opacity:0;transform:translateY(22px) scale(.94);filter:blur(10px)}100%{opacity:1;transform:translateY(0) scale(1);filter:blur(0)}}@keyframes epicGlowSweep{0%{transform:translateX(-130%) skewX(-20deg)}100%{transform:translateX(130%) skewX(-20deg)}}.epic-reveal-stage{position:relative;overflow:hidden}.epic-reveal-stage:before{content:'';position:absolute;inset:-40%;background:radial-gradient(circle at 50% 20%,rgba(124,58,237,.32),transparent 34%),radial-gradient(circle at 15% 85%,rgba(245,158,11,.18),transparent 28%);pointer-events:none;animation:epicFlash 2.3s ease-in-out infinite}.epic-reveal-content{position:relative;z-index:1}.epic-winner-name{animation:epicNameReveal .95s cubic-bezier(.18,1.35,.32,1) both;text-shadow:0 0 26px rgba(167,139,250,.55)}.epic-crown{animation:epicCrownDrop .8s cubic-bezier(.18,1.35,.32,1) both}.epic-result-card{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both;position:relative;overflow:hidden}.epic-result-card:after{content:'';position:absolute;top:0;bottom:0;width:40%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent);animation:epicGlowSweep 1.05s ease-out .15s both;pointer-events:none}.epic-dots span{animation:epicFlash 1s ease-in-out infinite}.epic-dots span:nth-child(2){animation-delay:.15s}.epic-dots span:nth-child(3){animation-delay:.3s}@keyframes redGreenPulse{0%,100%{transform:scale(1);filter:saturate(1)}50%{transform:scale(1.018);filter:saturate(1.25)}}.red-green-red{border-color:rgba(248,113,113,.55)!important;box-shadow:0 0 48px rgba(239,68,68,.24)!important;background:linear-gradient(145deg,rgba(127,29,29,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-green{border-color:rgba(52,211,153,.55)!important;box-shadow:0 0 48px rgba(16,185,129,.24)!important;background:linear-gradient(145deg,rgba(6,78,59,.82),rgba(24,24,27,.88))!important;animation:redGreenPulse 1.8s ease-in-out infinite}.red-green-badge{animation:epicCardIn .55s cubic-bezier(.18,1,.32,1) both}@media(max-width:640px){#screen-login{padding-left:16px!important;padding-right:16px!important}#login-form{width:100%;max-width:100%}:root{--app-x:clamp(12px,4vw,18px)}#screen-login,#screen-lobby,#screen-final{padding-left:var(--app-x)!important;padding-right:var(--app-x)!important}#screen-waiting,#screen-game,#screen-reveal{padding:var(--app-x)!important;gap:12px}#screen-waiting>.glass:first-child,#screen-game>.glass:first-child,#screen-reveal>.glass:first-child{border-radius:24px;top:var(--app-x);margin:0}#admin-settings{border-bottom:0!important}.screen .mx-4{margin-left:0!important;margin-right:0!important}.screen .px-5{padding-left:16px!important;padding-right:16px!important}.screen .p-5{padding:16px!important}#screen-game>.flex-1,#screen-reveal>.flex-1,#screen-waiting>.flex-1{padding-left:2px!important;padding-right:2px!important}#game-question{font-size:1.35rem;line-height:1.25}#vote-grid{gap:10px}.vote-card{padding:16px 10px!important}#toast{max-width:calc(100vw - 24px);white-space:normal;text-align:center;justify-content:center}}`;
     document.head.appendChild(style);
   }
 
@@ -617,6 +669,7 @@ function handleSocketMessage(data, { fromPoll = false } = {}) {
       state.hostId = String(data.hostId ?? state.hostId ?? '');
       state.isHost = sid() === state.hostId;
       state.currentRound = 0;
+      state.currentReaderId = null;
       state.scores = {};
       state.players.forEach(p => { state.scores[p.id] = 0; });
       saveActiveSession();
@@ -827,7 +880,7 @@ window.App = {
       await connectSocket(code);
       emit({ type: 'player_joined', player: currentPlayer() });
       saveActiveSession();
-      if ((roomData.status === 'playing' || gameState.status === 'playing') && state.currentRound && (state.settings.onlyVoting || state.currentQuestion || state.currentInventorId)) _startRound({ roundNum: state.currentRound, question: state.currentQuestion, inventorId: state.currentInventorId });
+      if ((roomData.status === 'playing' || gameState.status === 'playing') && state.currentRound && (state.settings.onlyVoting || state.currentQuestion || state.currentInventorId)) _startRound({ roundNum: state.currentRound, question: state.currentQuestion, inventorId: state.currentInventorId, readerId: state.currentReaderId });
       else if ((roomData.status === 'finished' || gameState.status === 'finished') && Object.keys(state.scores).length) _showFinal();
       else App._enterWaiting();
     } catch (error) {
@@ -925,9 +978,13 @@ window.App = {
       byId('cfg-questions').checked = s.useQuestions;
       byId('cfg-visible').checked = s.questionVisible ?? true;
       if (byId('cfg-round-time')) byId('cfg-round-time').value = String(s.roundTimeLimit ?? 30);
+      const readerModeInput = document.querySelector(`input[name="cfg-reader-mode"][value="${s.questionReaderMode || 'everyone'}"]`);
+      if (readerModeInput) readerModeInput.checked = true;
+      renderQuestionReaderOptions(s.questionReaderId);
       renderQuestionCategorySettings(s.questionCategories);
       App.updateQuestionMode();
       App.updateOnlyVotingMode();
+      App.updateReaderMode();
       App.updateResultOptionsMode();
       App.updateInfiniteMode();
       App.updateVisibleHint();
@@ -1064,7 +1121,24 @@ window.App = {
     visibleRow?.classList.toggle('pointer-events-none', onlyVoting);
 
     App.updateQuestionMode?.();
+    App.updateReaderMode?.();
     App.updateVisibleHint?.();
+    updateStartButton();
+  },
+
+
+  updateReaderMode() {
+    renderQuestionReaderOptions(byId('cfg-question-reader-id')?.value || state.settings.questionReaderId);
+    const onlyVoting = byId('cfg-only-voting')?.checked ?? false;
+    const useQuestions = byId('cfg-questions')?.checked ?? true;
+    const enabled = !onlyVoting && useQuestions;
+    const card = byId('question-reader-card');
+    const selectedMode = document.querySelector('input[name="cfg-reader-mode"]:checked')?.value || 'everyone';
+    card?.classList.toggle('hidden', onlyVoting);
+    card?.classList.toggle('opacity-50', !enabled);
+    card?.classList.toggle('pointer-events-none', !enabled);
+    card?.querySelectorAll('input,select').forEach(el => { el.disabled = !enabled; });
+    byId('cfg-reader-single-box')?.classList.toggle('hidden', selectedMode !== 'single' || !enabled);
     updateStartButton();
   },
 
@@ -1076,6 +1150,7 @@ window.App = {
     card?.classList.toggle('opacity-50', !enabled);
     card?.classList.toggle('pointer-events-none', !enabled);
     card?.querySelectorAll('input,button').forEach(el => { el.disabled = !enabled; });
+    App.updateReaderMode?.();
     App.updateCategorySummary();
   },
 
@@ -1094,6 +1169,8 @@ window.App = {
     const hint = byId('cfg-visible-hint');
     if (!hint) return;
     if (byId('cfg-only-voting')?.checked) hint.textContent = 'Sin preguntas: solo se vota';
+    else if (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value === 'single') hint.textContent = 'Solo el lector único ve la pregunta';
+    else if (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value === 'random') hint.textContent = 'Un lector aleatorio ve cada pregunta';
     else hint.textContent = byId('cfg-visible').checked ? 'Todos ven la pregunta' : 'Solo el admin ve la pregunta';
   },
 
@@ -1115,6 +1192,13 @@ window.App = {
       return;
     }
     const privateVote = byId('cfg-private').checked;
+    const questionReaderMode = (!onlyVoting && useQuestions) ? (document.querySelector('input[name="cfg-reader-mode"]:checked')?.value || 'everyone') : 'everyone';
+    const questionReaderId = questionReaderMode === 'single' ? String(byId('cfg-question-reader-id')?.value || '') : null;
+    if (questionReaderMode === 'single' && !questionReaderId) {
+      toast('Elige quién será el lector único', '📖');
+      App.updateReaderMode?.();
+      return;
+    }
     const showAllResults = byId('cfg-show-all-results')?.checked ?? true;
     const infiniteMode = byId('cfg-infinite-mode')?.checked ?? false;
     const rounds = Math.min(50, Math.max(1, parseInt(byId('cfg-rounds')?.value ?? '5', 10) || 5));
@@ -1131,6 +1215,8 @@ window.App = {
       onlyVoting,
       useQuestions,
       questionVisible: !onlyVoting && byId('cfg-visible').checked,
+      questionReaderMode,
+      questionReaderId,
       roundTimeLimit: parseInt(byId('cfg-round-time')?.value ?? '30', 10) || 0,
       questionCategories: selectedCategories,
     });
@@ -1229,6 +1315,7 @@ window.App = {
       state.currentRound = 0;
       state.currentQuestion = null;
       state.currentInventorId = null;
+      state.currentReaderId = null;
       state.hasVoted = false;
       await connectSocket(state.room.code);
       persistGameState({ status: 'waiting' });
@@ -1269,6 +1356,7 @@ function closeRoomLocally(message = 'La sala ha terminado.') {
   state.currentRound = 0;
   state.currentQuestion = null;
   state.currentInventorId = null;
+  state.currentReaderId = null;
   state.hasVoted = false;
   setTimeout(() => {
     overlay.remove();
@@ -1289,6 +1377,21 @@ function animateVoteCard(card) {
   setTimeout(() => ripple.remove(), 600);
 }
 
+
+function pickQuestionReaderId(settings = state.settings) {
+  if (settings.onlyVoting || !settings.useQuestions) return null;
+  const mode = normalizeQuestionReaderMode(settings.questionReaderMode);
+  if (mode === 'everyone') return null;
+  const candidates = questionReaderCandidates(state.players, settings);
+  if (!candidates.length) return null;
+  if (mode === 'single') {
+    const chosen = String(settings.questionReaderId || '');
+    if (chosen && candidates.some(player => String(player.id) === chosen)) return chosen;
+    return String(candidates[0].id);
+  }
+  return String(candidates[Math.floor(Math.random() * candidates.length)].id);
+}
+
 function getQuestionPoolForSettings(settings = state.settings) {
   const categories = getQuestionCategories();
   if (!categories.length) return (window.questions || []).map(question => typeof question === 'string' ? question : question.text).filter(Boolean);
@@ -1300,15 +1403,15 @@ function getQuestionPoolForSettings(settings = state.settings) {
 }
 
 function _buildRound(roundNum) {
-  if (state.settings.onlyVoting) return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: null, onlyVoting: true };
+  if (state.settings.onlyVoting) return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: null, readerId: null, onlyVoting: true };
   const questionList = getQuestionPoolForSettings();
   if (state.settings.useQuestions && questionList.length) {
     const picked = questionList[Math.floor(Math.random() * questionList.length)];
-    return { roundNum, question: typeof picked === 'string' ? picked : picked.text, questionCategoryId: picked.categoryId ?? null, questionCategoryName: picked.categoryName ?? null, inventorId: null };
+    return { roundNum, question: typeof picked === 'string' ? picked : picked.text, questionCategoryId: picked.categoryId ?? null, questionCategoryName: picked.categoryName ?? null, inventorId: null, readerId: pickQuestionReaderId(state.settings) };
   }
   const participants = votingPlayers();
   const inventorPool = participants.length ? participants : state.players;
-  return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: inventorPool[Math.floor(Math.random() * inventorPool.length)]?.id ?? sid() };
+  return { roundNum, question: null, questionCategoryId: null, questionCategoryName: null, inventorId: inventorPool[Math.floor(Math.random() * inventorPool.length)]?.id ?? sid(), readerId: null };
 }
 
 function allPlayersVoted() {
@@ -1411,6 +1514,18 @@ function renderTimer(remaining) {
   bar.style.width = `${pct}%`;
 }
 
+
+function renderQuestionReaderOptions(selectedId = state.settings.questionReaderId) {
+  const select = byId('cfg-question-reader-id');
+  if (!select) return;
+  const pendingSettings = normalizeSettings({ ...state.settings, adminCountsForVotes: getAdminCountsSettingFromUI(), onlyVoting: byId('cfg-only-voting')?.checked ?? state.settings.onlyVoting, useQuestions: byId('cfg-questions')?.checked ?? state.settings.useQuestions });
+  const candidates = questionReaderCandidates(state.players, pendingSettings);
+  const previous = String(selectedId || select.value || '');
+  select.innerHTML = candidates.map(player => `<option value="${escapeHTML(player.id)}">${escapeHTML(playerLabel(player))}</option>`).join('');
+  if (previous && candidates.some(player => String(player.id) === previous)) select.value = previous;
+  else if (candidates[0]) select.value = String(candidates[0].id);
+}
+
 function renderQuestionCategorySettings(selectedIds = state.settings.questionCategories) {
   const list = byId('question-category-list');
   const card = byId('question-categories-card');
@@ -1459,15 +1574,18 @@ function renderWaitingPlayers() {
     const adminOutBadge = p.id === state.hostId && getAdminCountsSettingFromUI() === false ? '<span class="text-xs bg-red-500/15 text-red-200 px-2.5 py-0.5 rounded-full font-bold">No juega</span>' : '';
     return `<div class="flex items-center gap-3 glass rounded-2xl px-4 py-3 pop" style="animation-delay:${i * .05}s"><div class="w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient(p.username)} flex items-center justify-center font-black text-base shadow-md">${initials(p.username)}</div><span class="flex-1 font-semibold truncate">${username}</span>${p.id === sid() ? '<span class="text-xs text-zinc-500 font-medium">Tú</span>' : ''}${hostBadge}${adminOutBadge}</div>`;
   }).join('');
+  renderQuestionReaderOptions(byId('cfg-question-reader-id')?.value || state.settings.questionReaderId);
+  App.updateReaderMode?.();
   updateStartButton();
 }
 
-function _startRound({ roundNum, question, inventorId }) {
+function _startRound({ roundNum, question, inventorId, readerId }) {
   stopTimer();
   clearRevealAnimationTimers();
   state.currentRound = roundNum;
   state.currentQuestion = question ? String(question) : null;
   state.currentInventorId = inventorId ? String(inventorId) : null;
+  state.currentReaderId = readerId ? String(readerId) : null;
   state.votes = {};
   state.roundWinnerIds = [];
   state.hasVoted = false;
@@ -1496,11 +1614,24 @@ function renderQuestionArea() {
     if (qEl) qEl.textContent = '';
     return;
   }
-  const canSeeQuestion = state.settings.questionVisible || state.isHost;
   if (state.currentQuestion) {
-    inventorEl.classList.add('hidden');
+    const reader = questionReaderById();
+    const readerMode = normalizeQuestionReaderMode(state.settings.questionReaderMode);
+    const hasReaderMode = readerMode === 'single' || readerMode === 'random';
+    if (hasReaderMode && reader) {
+      inventorEl?.classList.remove('hidden');
+      byId('inventor-name').textContent = reader.id === sid() ? 'Tú' : reader.username;
+    } else {
+      inventorEl?.classList.add('hidden');
+    }
     qEl.classList.remove('hidden');
-    qEl.textContent = canSeeQuestion ? state.currentQuestion : '🔒 El admin conoce la pregunta';
+    if (userCanReadCurrentQuestion()) {
+      qEl.textContent = state.currentQuestion;
+    } else if (hasReaderMode && reader) {
+      qEl.innerHTML = `<span class="block text-sm text-zinc-400 font-medium mb-3">📖 ${escapeHTML(playerLabel(reader))} tiene la pregunta.</span><span class="block text-zinc-500 text-base">Escucha al lector y vota cuando la lea en voz alta.</span>`;
+    } else {
+      qEl.textContent = '🔒 El admin conoce la pregunta';
+    }
     return;
   }
   const inventor = state.players.find(p => p.id === String(state.currentInventorId));
